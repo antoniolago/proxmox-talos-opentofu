@@ -2,9 +2,15 @@
 kubernetes_config_path    = "~/.kube/config"
 Kubernetes_config_context = "admin@yourclustername"
 
-# Cilium Load Balancer
-cilium_load_balancer_ip_range_start = "192.168.10.95"
-cilium_load_balancer_ip_range_stop = "192.168.10.99"
 
-# ArgoCD
-argocd_domain = "argocd.local"
+# GitHub credentials for Flux GitRepository authentication
+github_username = "your-github-username"
+github_password = "your-github-personal-access-token"
+
+# Vaultwarden Kubernetes Secrets
+vaultwarden_server_url      = "https://your-vaultwarden-server.com"
+vaultwarden_client_id       = "<your_client_id>"
+vaultwarden_client_secret   = "<your_client_secret>"
+vaultwarden_master_password = "<your_master_password>"
+vaultwarden_chart_version   = "latest"
+vaultwarden_namespace       = "vaultwarden-system"

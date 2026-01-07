@@ -1,17 +1,16 @@
 resource "proxmox_vm_qemu" "kubernetes_control_plane" {
-  depends_on  = [proxmox_storage_iso.talos_linux_iso_image]
   for_each    = var.node_data.controlplanes
-  name        = format("%s-kubernetes-control-plane-%s", var.cluster_name, index(keys(var.node_data.controlplanes), each.key))
+  name        = format("%s-kubernetes-control-plane-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.controlplanes), each.key))
   description = "Kubernetes Control Plane"
-  target_node = var.proxmox_target_node
+  target_node = each.value.target_node != null ? each.value.target_node : var.proxmox_target_node
   agent       = 1
   vm_state    = "running"
-  memory      = 8192
+  memory      = each.value.memory
   boot        = "order=virtio0;ide2"
   nameserver  = var.domain_name_server
 
   cpu {
-    cores = 2
+    cores = each.value.cpu_cores
   }
 
   vga {
@@ -34,7 +33,7 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
     slot    = "virtio0"
     type    = "disk"
     storage = var.proxmox_storage_device
-    size    = "50G"
+    size    = each.value.disk_size
     discard = true
   }
 
@@ -52,19 +51,18 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
 
 
 resource "proxmox_vm_qemu" "kubernetes_worker" {
-  depends_on  = [proxmox_storage_iso.talos_linux_iso_image]
   for_each    = var.node_data.workers
-  name        = format("%s-kubernetes-worker-%s", var.cluster_name, index(keys(var.node_data.workers), each.key))
+  name        = format("%s-kubernetes-worker-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.workers), each.key))
   description = "Kubernetes Worker Node"
-  target_node = var.proxmox_target_node
+  target_node = each.value.target_node != null ? each.value.target_node : var.proxmox_target_node
   agent       = 1
   vm_state    = "running"
-  memory      = 16384
+  memory      = each.value.memory
   boot        = "order=virtio0;ide2"
   nameserver  = var.domain_name_server
 
   cpu {
-    cores = 2
+    cores = each.value.cpu_cores
   }
 
   vga {
@@ -87,7 +85,7 @@ resource "proxmox_vm_qemu" "kubernetes_worker" {
     slot    = "virtio0"
     type    = "disk"
     storage = var.proxmox_storage_device
-    size    = "50G"
+    size    = each.value.disk_size
     discard = true
   }
 

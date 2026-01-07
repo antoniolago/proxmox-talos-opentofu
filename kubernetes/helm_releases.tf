@@ -1,48 +1,108 @@
-resource "helm_release" "argocd" {
-  name             = "argo-cd"
-  namespace        = "argocd"
+resource "helm_release" "flux_operator" {
+  name             = "flux-operator"
+  namespace        = "flux-system"
   create_namespace = true
-  chart            = "argo-cd"
-  version          = "9.1.0"
-  repository       = "https://argoproj.github.io/argo-helm"
+  chart            = "flux-operator"
+  repository       = "oci://ghcr.io/controlplaneio-fluxcd/charts"
   timeout          = 120
-  set = [
-    {
-      name  = "global.domain"
-      value = var.argocd_domain
-    },
-    {
-      name  = "configs.params.server\\.insecure"
-      value = "true"
-    },
-    {
-      name  = "server.ingress.enabled"
-      value = "true"
-    },
-    {
-      name  = "server.ingress.ingressClassName"
-      value = "cilium"
-    },
-    {
-      name  = "server.ingress.annotations.ingress\\.cilium\\.io/force-https"
-      value = "disabled"
-    },
-  ]
 }
 
-resource "helm_release" "cilium_lb_config" {
-  depends_on = [helm_release.argocd]
-  name       = "cilium-lb-config"
-  chart      = "${path.module}/helm_charts/cilium-lb-config"
-  timeout    = 60
-  set = [
-    {
-      name  = "ciliumLoadBalancerIpRange.start"
-      value = var.cilium_load_balancer_ip_range_start
-    },
-    {
-      name  = "ciliumLoadBalancerIpRange.stop"
-      value = var.cilium_load_balancer_ip_range_stop
-    },
-  ]
+resource "kubernetes_secret" "github_credentials" {
+  depends_on = [helm_release.flux_operator]
+  metadata {
+    name      = "github-credentials"
+    namespace = "flux-system"
+  }
+
+  data = {
+    username = var.github_username
+    password = var.github_password
+  }
+
+  type = "Opaque"
 }
+
+resource "kubernetes_manifest" "fluxinstance" {
+  depends_on = [kubernetes_secret.github_credentials]
+  manifest = {
+    apiVersion = "fluxcd.controlplane.io/v1"
+    kind       = "FluxInstance"
+    metadata = {
+      name      = "flux"
+      namespace = "flux-system"
+      annotations = {
+        "fluxcd.controlplane.io/reconcile"       = "enabled"
+        "fluxcd.controlplane.io/reconcileEvery"  = "1h"
+        "fluxcd.controlplane.io/reconcileTimeout" = "3m"
+      }
+    }
+    spec = {
+      sync = {
+        kind       = "GitRepository"
+        url        = "https://github.com/antoniolago/lag0-fleet-infra-ton"
+        ref        = "refs/heads/main"
+        path       = "cluster"
+        pullSecret = "github-credentials"
+      }
+      distribution = {
+        version  = "2.x"
+        registry = "ghcr.io/fluxcd"
+      }
+      components = [
+        "source-controller",
+        "kustomize-controller",
+        "helm-controller",
+        "notification-controller",
+        "image-reflector-controller",
+        "image-automation-controller"
+      ]
+      cluster = {
+        type = "kubernetes"
+      }
+    }
+  }
+}
+
+resource "kubernetes_namespace" "vaultwarden" {
+  metadata {
+    name = var.vaultwarden_namespace
+  }
+}
+
+resource "kubernetes_secret" "vaultwarden_credentials" {
+  depends_on = [kubernetes_namespace.vaultwarden]
+  metadata {
+    name      = "vaultwarden-kubernetes-secrets"
+    namespace = var.vaultwarden_namespace
+  }
+
+  data = {
+    BW_CLIENTID                  = var.vaultwarden_client_id
+    BW_CLIENTSECRET              = var.vaultwarden_client_secret
+    VAULTWARDEN__MASTERPASSWORD  = var.vaultwarden_master_password
+  }
+
+  type = "Opaque"
+}
+
+resource "helm_release" "vaultwarden_kubernetes_secrets" {
+  depends_on       = [kubernetes_secret.vaultwarden_credentials]
+  name             = "vaultwarden-kubernetes-secrets"
+  namespace        = var.vaultwarden_namespace
+  create_namespace = false
+  chart            = "vaultwarden-kubernetes-secrets"
+  repository       = "oci://ghcr.io/antoniolago/charts"
+  version          = var.vaultwarden_chart_version
+  timeout          = 120
+
+  set {
+    name  = "env.config.VAULTWARDEN__SERVERURL"
+    value = var.vaultwarden_server_url
+  }
+
+  set {
+    name  = "image.tag"
+    value = var.vaultwarden_chart_version
+  }
+}
+

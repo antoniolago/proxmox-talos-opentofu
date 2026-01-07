@@ -1,12 +1,24 @@
 machine:
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+          - https://harbor.lag0.com.br/dhub
+          - https://harbor.sinprors.org.br/dhub
   features:
     hostDNS:
       forwardKubeDNSToHost: false
+  time:
+    servers:
+      - ${network_gateway}
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
   install:
     disk: ${install_disk}
     image: ${install_image}
+  kubelet:
+    extraConfig:
   network:
-    hostname: ${hostname}
     nameservers:
       - ${dns}
     interfaces:
@@ -26,10 +38,3 @@ cluster:
       name: none
   proxy:
     disabled: true
-  inlineManifests:
-    - name: gateway-api
-      contents: |
-        ${indent(8, gateway_api_manifest)}
-    - name: cilium
-      contents: |
-        ${indent(8, cilium_manifest)}

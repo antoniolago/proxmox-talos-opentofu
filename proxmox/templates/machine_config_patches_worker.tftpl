@@ -2,11 +2,15 @@ machine:
   features:
     hostDNS:
       forwardKubeDNSToHost: false
+  time:
+    servers:
+      - ${network_gateway}
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
   install:
     disk: ${install_disk}
     image: ${install_image}
   network:
-    hostname: ${hostname}
     nameservers:
       - ${dns}
     interfaces:
