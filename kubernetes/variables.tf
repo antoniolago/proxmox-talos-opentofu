@@ -45,13 +45,13 @@ variable "vaultwarden_master_password" {
 
 variable "vaultwarden_chart_version" {
   type        = string
-  default     = "latest"
+  default     = "1.0.2"
   description = "Vaultwarden Kubernetes Secrets chart version"
 }
 
 variable "vaultwarden_namespace" {
   type        = string
-  default     = "vaultwarden-system"
+  default     = "vaultwarden-kubernetes-secrets"
   description = "Namespace for vaultwarden-kubernetes-secrets"
 }
 

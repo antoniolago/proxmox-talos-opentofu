@@ -3,21 +3,21 @@ machine:
     mirrors:
       docker.io:
         endpoints:
-          - https://harbor.lag0.com.br/dhub
-          - https://harbor.sinprors.org.br/dhub
+          - https://harbor.lag0.com.br/v2
   features:
     hostDNS:
       forwardKubeDNSToHost: false
   time:
     servers:
-      - ${network_gateway}
       - 0.pool.ntp.org
       - 1.pool.ntp.org
+      - 2.pool.ntp.org
   install:
     disk: ${install_disk}
     image: ${install_image}
   kubelet:
     extraConfig:
+      serverTLSBootstrap: true
   network:
     nameservers:
       - ${dns}
@@ -34,7 +34,11 @@ machine:
 cluster:
   allowSchedulingOnControlPlanes: false
   network:
-    cni:
-      name: none
+    #cni:
+    #  name: none
+    podSubnets:
+      - 10.252.0.0/16
+    serviceSubnets:
+      - 10.253.0.0/16
   proxy:
-    disabled: true
+    disabled: false

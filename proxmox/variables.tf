@@ -51,7 +51,7 @@ variable "cluster_name" {
 variable "cluster_vip_shared_ip" {
   description = "Shared virtual IP address for control plane nodes"
   type        = string
-  default     = "192.168.1.100"
+  default     = "192.168.2.200"
 }
 
 variable "node_data" {
@@ -137,6 +137,6 @@ variable "install_cilium" {
 variable "cilium_version" {
   description = "Cilium Helm chart version to install"
   type        = string
-  default     = "1.16.6"
+  default     = "1.18.5"
 }
 

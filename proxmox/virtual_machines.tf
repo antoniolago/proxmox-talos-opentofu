@@ -1,6 +1,6 @@
 resource "proxmox_vm_qemu" "kubernetes_control_plane" {
   for_each    = var.node_data.controlplanes
-  name        = format("%s-kubernetes-control-plane-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.controlplanes), each.key))
+  name        = format("%s-k8s-control-plane-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.controlplanes), each.key))
   description = "Kubernetes Control Plane"
   target_node = each.value.target_node != null ? each.value.target_node : var.proxmox_target_node
   agent       = 1
@@ -47,12 +47,21 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
   # Cloud init setup
   os_type   = "cloud-init"
   ipconfig0 = "ip=${each.key}/24,gw=${var.network_gateway}"
+
+  lifecycle {
+    ignore_changes = [
+      disk[0].format,
+      disk[1].format,
+      disk[2].format,
+      startup_shutdown,
+    ]
+  }
 }
 
 
 resource "proxmox_vm_qemu" "kubernetes_worker" {
   for_each    = var.node_data.workers
-  name        = format("%s-kubernetes-worker-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.workers), each.key))
+  name        = format("%s-k8s-worker-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.workers), each.key))
   description = "Kubernetes Worker Node"
   target_node = each.value.target_node != null ? each.value.target_node : var.proxmox_target_node
   agent       = 1
@@ -99,4 +108,13 @@ resource "proxmox_vm_qemu" "kubernetes_worker" {
   # Cloud init setup
   os_type   = "cloud-init"
   ipconfig0 = "ip=${each.key}/24,gw=${var.network_gateway}"
+
+  lifecycle {
+    ignore_changes = [
+      disk[0].format,
+      disk[1].format,
+      disk[2].format,
+      startup_shutdown,
+    ]
+  }
 }

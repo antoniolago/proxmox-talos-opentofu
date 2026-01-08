@@ -1,14 +1,90 @@
-resource "helm_release" "flux_operator" {
-  name             = "flux-operator"
-  namespace        = "flux-system"
-  create_namespace = true
-  chart            = "flux-operator"
-  repository       = "oci://ghcr.io/controlplaneio-fluxcd/charts"
-  timeout          = 120
+resource "null_resource" "local_path_provisioner" {
+  triggers = {
+    version = "v0.0.34"
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      KUBECONFIG_PATH="${var.kubernetes_config_path}"
+      KUBECONFIG_PATH="$${KUBECONFIG_PATH/#\~/$HOME}"
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.34/deploy/local-path-storage.yaml
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" label namespace local-path-storage pod-security.kubernetes.io/enforce=privileged pod-security.kubernetes.io/audit=privileged pod-security.kubernetes.io/warn=privileged --overwrite
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+    EOT
+    interpreter = ["bash", "-c"]
+  }
 }
 
+resource "null_resource" "approve_csr" {
+  depends_on = [null_resource.local_path_provisioner]
+  
+  triggers = {
+    always_run = timestamp()
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      KUBECONFIG_PATH="${var.kubernetes_config_path}"
+      KUBECONFIG_PATH="$${KUBECONFIG_PATH/#\~/$HOME}"
+      
+      # Approve all pending kubelet serving certificate CSRs
+      echo "Checking for pending CSRs..."
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" get csr -o json | \
+        jq -r '.items[] | select(.status.conditions == null) | .metadata.name' | \
+        xargs -I {} kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" certificate approve {} || true
+      
+      echo "CSR approval complete"
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+}
+
+resource "null_resource" "flux_operator_install" {
+  depends_on = [null_resource.approve_csr]
+  
+  triggers = {
+    version = "0.38.1"
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      set -e
+      set -x
+      
+      KUBECONFIG_PATH="${var.kubernetes_config_path}"
+      KUBECONFIG_PATH="$${KUBECONFIG_PATH/#\~/$HOME}"
+      
+      echo "Using kubeconfig: $KUBECONFIG_PATH"
+      echo "Using context: ${var.Kubernetes_config_context}"
+      
+      # Check if we can connect to the cluster
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" cluster-info
+      
+      # Create flux-system namespace first
+      echo "Creating flux-system namespace..."
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" create namespace flux-system --dry-run=client -o yaml | kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" apply -f -
+      
+      # Install Flux Operator (includes CRDs and operator deployment)
+      echo "Installing Flux Operator..."
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" apply --server-side -f https://github.com/controlplaneio-fluxcd/flux-operator/releases/download/v0.38.1/install.yaml
+      
+      # Wait for CRDs to be established
+      echo "Waiting for CRDs..."
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" wait --for condition=established --timeout=300s crd/fluxinstances.fluxcd.controlplane.io
+      
+      # Wait for operator deployment to be ready
+      echo "Waiting for operator deployment..."
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" wait --for=condition=available --timeout=600s deployment/flux-operator -n flux-system
+      
+      echo "Flux operator installation complete!"
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+}
+
+
 resource "kubernetes_secret" "github_credentials" {
-  depends_on = [helm_release.flux_operator]
+  depends_on = [null_resource.flux_operator_install]
   metadata {
     name      = "github-credentials"
     namespace = "flux-system"
@@ -22,48 +98,103 @@ resource "kubernetes_secret" "github_credentials" {
   type = "Opaque"
 }
 
-resource "kubernetes_manifest" "fluxinstance" {
-  depends_on = [kubernetes_secret.github_credentials]
-  manifest = {
-    apiVersion = "fluxcd.controlplane.io/v1"
-    kind       = "FluxInstance"
-    metadata = {
-      name      = "flux"
-      namespace = "flux-system"
-      annotations = {
-        "fluxcd.controlplane.io/reconcile"       = "enabled"
-        "fluxcd.controlplane.io/reconcileEvery"  = "1h"
-        "fluxcd.controlplane.io/reconcileTimeout" = "3m"
+resource "null_resource" "fluxinstance" {
+  depends_on = [
+    null_resource.flux_operator_install,
+    kubernetes_secret.github_credentials
+  ]
+  
+  triggers = {
+    flux_operator_version = "0.38.1"
+    manifest_sha          = sha256(jsonencode({
+      apiVersion = "fluxcd.controlplane.io/v1"
+      kind       = "FluxInstance"
+      metadata = {
+        name      = "flux"
+        namespace = "flux-system"
+        annotations = {
+          "fluxcd.controlplane.io/reconcile"       = "enabled"
+          "fluxcd.controlplane.io/reconcileEvery"  = "1h"
+          "fluxcd.controlplane.io/reconcileTimeout" = "3m"
+        }
       }
-    }
-    spec = {
-      sync = {
-        kind       = "GitRepository"
-        url        = "https://github.com/antoniolago/lag0-fleet-infra-ton"
-        ref        = "refs/heads/main"
-        path       = "cluster"
-        pullSecret = "github-credentials"
+      spec = {
+        sync = {
+          kind       = "GitRepository"
+          url        = "https://github.com/antoniolago/lag0-fleet-infra-ton"
+          ref        = "refs/heads/main"
+          path       = "cluster"
+          pullSecret = "github-credentials"
+        }
+        distribution = {
+          version  = "2.x"
+          registry = "ghcr.io/fluxcd"
+        }
+        components = [
+          "source-controller",
+          "kustomize-controller",
+          "helm-controller",
+          "notification-controller",
+          "image-reflector-controller",
+          "image-automation-controller"
+        ]
+        cluster = {
+          type = "kubernetes"
+        }
       }
-      distribution = {
-        version  = "2.x"
-        registry = "ghcr.io/fluxcd"
+    }))
+  }
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      KUBECONFIG_PATH="${var.kubernetes_config_path}"
+      KUBECONFIG_PATH="$${KUBECONFIG_PATH/#\~/$HOME}"
+      
+      # Wait for CRDs to be ready
+      echo "Waiting for FluxInstance CRD to be established..."
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" wait --for condition=established --timeout=300s crd/fluxinstances.fluxcd.controlplane.io || {
+        echo "CRD not ready, checking if it exists..."
+        kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" get crd fluxinstances.fluxcd.controlplane.io
+        exit 1
       }
-      components = [
-        "source-controller",
-        "kustomize-controller",
-        "helm-controller",
-        "notification-controller",
-        "image-reflector-controller",
-        "image-automation-controller"
-      ]
-      cluster = {
-        type = "kubernetes"
-      }
-    }
+      
+      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" apply -f - <<EOF
+      apiVersion: fluxcd.controlplane.io/v1
+      kind: FluxInstance
+      metadata:
+        name: flux
+        namespace: flux-system
+        annotations:
+          fluxcd.controlplane.io/reconcile: "enabled"
+          fluxcd.controlplane.io/reconcileEvery: "1h"
+          fluxcd.controlplane.io/reconcileTimeout: "3m"
+      spec:
+        sync:
+          kind: GitRepository
+          url: https://github.com/antoniolago/lag0-fleet-infra-ton
+          ref: refs/heads/main
+          path: cluster
+          pullSecret: github-credentials
+        distribution:
+          version: 2.x
+          registry: ghcr.io/fluxcd
+        components:
+          - source-controller
+          - kustomize-controller
+          - helm-controller
+          - notification-controller
+          - image-reflector-controller
+          - image-automation-controller
+        cluster:
+          type: kubernetes
+      EOF
+    EOT
+    interpreter = ["bash", "-c"]
   }
 }
 
 resource "kubernetes_namespace" "vaultwarden" {
+  depends_on = [null_resource.local_path_provisioner]
   metadata {
     name = var.vaultwarden_namespace
   }
@@ -93,16 +224,21 @@ resource "helm_release" "vaultwarden_kubernetes_secrets" {
   chart            = "vaultwarden-kubernetes-secrets"
   repository       = "oci://ghcr.io/antoniolago/charts"
   version          = var.vaultwarden_chart_version
-  timeout          = 120
+  timeout          = 600
+  wait             = false
+  wait_for_jobs    = false
 
-  set {
-    name  = "env.config.VAULTWARDEN__SERVERURL"
-    value = var.vaultwarden_server_url
-  }
-
-  set {
-    name  = "image.tag"
-    value = var.vaultwarden_chart_version
-  }
+  values = [
+    yamlencode({
+      env = {
+        config = {
+          VAULTWARDEN__SERVERURL = var.vaultwarden_server_url
+        }
+      }
+      image = {
+        tag = var.vaultwarden_chart_version
+      }
+    })
+  ]
 }
 

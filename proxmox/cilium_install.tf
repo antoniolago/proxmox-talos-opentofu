@@ -8,9 +8,10 @@ resource "null_resource" "install_cilium" {
   count = var.install_cilium ? 1 : 0
 
   triggers = {
-    kubeconfig_sha256 = sha256(talos_cluster_kubeconfig.this.kubeconfig_raw)
-    cilium_version    = var.cilium_version
-    cluster_endpoint  = var.cluster_vip_shared_ip
+    kubeconfig_sha256    = sha256(talos_cluster_kubeconfig.this.kubeconfig_raw)
+    cilium_version       = var.cilium_version
+    cluster_endpoint     = var.cluster_vip_shared_ip
+    cilium_values_sha256 = filesha256("${path.module}/cilium-values.yaml")
   }
 
   depends_on = [local_sensitive_file.bootstrap_kubeconfig]
