@@ -5,6 +5,7 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
   target_node = each.value.target_node != null ? each.value.target_node : var.proxmox_target_node
   agent       = 1
   vm_state    = "running"
+  start_at_node_boot      = true
   memory      = each.value.memory
   boot        = "order=virtio0;ide2"
   nameserver  = var.domain_name_server
@@ -53,7 +54,6 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
       disk[0].format,
       disk[1].format,
       disk[2].format,
-      startup_shutdown,
     ]
   }
 }
@@ -66,6 +66,7 @@ resource "proxmox_vm_qemu" "kubernetes_worker" {
   target_node = each.value.target_node != null ? each.value.target_node : var.proxmox_target_node
   agent       = 1
   vm_state    = "running"
+  start_at_node_boot = true
   memory      = each.value.memory
   boot        = "order=virtio0;ide2"
   nameserver  = var.domain_name_server
@@ -114,7 +115,6 @@ resource "proxmox_vm_qemu" "kubernetes_worker" {
       disk[0].format,
       disk[1].format,
       disk[2].format,
-      startup_shutdown,
     ]
   }
 }
