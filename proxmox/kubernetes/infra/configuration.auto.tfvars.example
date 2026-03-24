@@ -1,0 +1,96 @@
+# Proxmox
+proxmox_api_url = "https://192.168.88.240:8006/api2/json"
+proxmox_api_token_id = "root@pam!123123"
+proxmox_api_token_secret = "123123123"
+proxmox_target_node = "ton"
+proxmox_storage_device   = "local-lvm"
+
+# Talos Linux
+# Talos version needs to correspond to the install_image version in node_data
+# See: https://github.com/siderolabs/terraform-provider-talos/blob/main/docs/data-sources/machine_configuration.md
+talos_version                  = "1.12.1"
+kubernetes_version             = "1.35.0"
+# With these variables you can configure the ISO images which are uploaded to Proxmox for initially booting the VMs
+talos_linux_iso_image_url = "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.12.1/nocloud-amd64.iso"
+talos_linux_iso_image_filename = "nocloud-amd64.iso"
+# Name of the cluster
+cluster_name = "ton-cluster"
+# VIP address for the control planes, see https://www.talos.dev/v1.11/talos-guides/network/vip/
+cluster_vip_shared_ip = "192.168.88.200"
+# The node configuration with granular resource allocation, adjust it to your liking
+node_data = {
+  controlplanes = {
+    "192.168.88.201" = {
+      install_disk  = "/dev/vda"
+      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
+      memory        = 5056   # 8GB RAM
+      cpu_cores     = 1      # 2 CPU cores
+      disk_size     = "15G"  # 50GB disk
+      target_node   = "ton01"  # Optional: specify Proxmox node
+    },
+    "192.168.88.202" = {
+      install_disk  = "/dev/vda"
+      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
+      memory        = 5056   # 8GB RAM
+      cpu_cores     = 1      # 2 CPU cores
+      disk_size     = "15G"  # 50GB disk
+      target_node   = "ton02"  # Optional: specify Proxmox node
+    },
+    "192.168.88.203" = {
+      install_disk  = "/dev/vda"
+      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
+      memory        = 3056   # 8GB RAM
+      cpu_cores     = 2      # 2 CPU cores
+      disk_size     = "15G"  # 50GB disk
+      target_node   = "ton03"  # Optional: specify Proxmox node
+    }
+  }
+  workers = {
+    "192.168.88.204" = {
+      install_disk  = "/dev/vda"
+      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
+      memory        = 10384  
+      cpu_cores     = 6      
+      disk_size     = "100G" # 100GB disk
+      target_node   = "ton01"  # Optional: specify Proxmox node
+    },
+    "192.168.88.205" = {
+      install_disk  = "/dev/vda"
+      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
+      memory        = 10384  # 32GB RAM
+      cpu_cores     = 3      # 8 CPU cores
+      disk_size     = "100G" # 200GB disk
+      target_node   = "ton02"  # Optional: specify Proxmox node
+    },
+    "192.168.88.206" = {
+      install_disk  = "/dev/vda"
+      install_image = "factory.talos.dev/nocloud-installer/9c1d1b442d73f96dcd04e81463eb20000ab014062d22e1b083e1773336bc1dd5:v1.12.4"
+      target_node   = "ton03"
+      #pci_devices = [
+      #  {
+      #    id         = "0"
+      #    mapping_id = "amdgpu"
+      #  }
+      #]
+      #machine_config_extra = <<-EOT
+      #  machine:
+      #    kernel:
+      #      modules:
+      #        - name: amdgpu
+      #EOT
+      memory        = 8000  # 32GB RAM
+      cpu_cores     = 8      # 8 CPU cores
+      disk_size     = "100G" # 200GB disk
+      target_node   = "ton03"  # Optional: specify Proxmox node
+    }
+  }
+}
+# Network configuration, which is applied to all nodes
+network            = "192.168.88.0/24"
+network_gateway    = "192.168.88.1"
+domain_name_server = "192.168.88.1"
+vlan_tag           = 0 # Optional: if you don't specify it no Vlan tag is set for the virtual machines
+
+merge_kubeconfig = true
+
+install_cilium = false

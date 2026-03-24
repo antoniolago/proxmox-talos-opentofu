@@ -14,3 +14,6 @@ vaultwarden_client_secret   = "<your_client_secret>"
 vaultwarden_master_password = "<your_master_password>"
 vaultwarden_chart_version   = "1.0.2"
 vaultwarden_namespace       = "vaultwarden-kubernetes-secrets"
+
+postgres_password = "your_postgres_password"
+admin_token = "your_admin_token"

@@ -15,32 +15,8 @@ resource "null_resource" "local_path_provisioner" {
   }
 }
 
-resource "null_resource" "approve_csr" {
-  depends_on = [null_resource.local_path_provisioner]
-  
-  triggers = {
-    always_run = timestamp()
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      KUBECONFIG_PATH="${var.kubernetes_config_path}"
-      KUBECONFIG_PATH="$${KUBECONFIG_PATH/#\~/$HOME}"
-      
-      # Approve all pending kubelet serving certificate CSRs
-      echo "Checking for pending CSRs..."
-      kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" get csr -o json | \
-        jq -r '.items[] | select(.status.conditions == null) | .metadata.name' | \
-        xargs -I {} kubectl --kubeconfig="$KUBECONFIG_PATH" --context="${var.Kubernetes_config_context}" certificate approve {} || true
-      
-      echo "CSR approval complete"
-    EOT
-    interpreter = ["bash", "-c"]
-  }
-}
-
 resource "null_resource" "flux_operator_install" {
-  depends_on = [null_resource.approve_csr]
+  depends_on = [null_resource.local_path_provisioner]
   
   triggers = {
     version = "0.38.1"
@@ -211,6 +187,19 @@ resource "kubernetes_secret" "vaultwarden_credentials" {
     BW_CLIENTID                  = var.vaultwarden_client_id
     BW_CLIENTSECRET              = var.vaultwarden_client_secret
     VAULTWARDEN__MASTERPASSWORD  = var.vaultwarden_master_password
+  }
+}
+
+resource "kubernetes_secret" "vaultwarden_server_credentials" {
+  depends_on = [kubernetes_namespace.vaultwarden]
+  metadata {
+    name      = "vaultwarden-secrets"
+    namespace = "vaultwarden"
+  }
+
+  data = {
+    POSTGRES_PASSWORD                  = var.vaultwarden_postgres_password
+    ADMIN_TOKEN              = var.vaultwarden_admin_token
   }
 
   type = "Opaque"

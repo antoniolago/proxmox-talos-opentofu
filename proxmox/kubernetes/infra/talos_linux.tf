@@ -50,7 +50,7 @@ resource "talos_machine_configuration_apply" "worker" {
   machine_configuration_input = data.talos_machine_configuration.worker.machine_configuration
   for_each                    = var.node_data.workers
   node                        = each.key
-  config_patches = [
+  config_patches = compact([
     templatefile("${path.module}/templates/machine_config_patches_worker.tftpl", {
       hostname        = each.value.hostname == null ? format("%s-worker-%s", var.cluster_name, index(keys(var.node_data.workers), each.key)) : each.value.hostname
       install_disk    = each.value.install_disk
@@ -59,8 +59,9 @@ resource "talos_machine_configuration_apply" "worker" {
       ip_address      = "${each.key}/24"
       network         = var.network
       network_gateway = var.network_gateway
-    })
-  ]
+    }),
+    each.value.machine_config_extra != "" ? each.value.machine_config_extra : "",
+  ])
 }
 
 resource "talos_machine_bootstrap" "this" {

@@ -31,6 +31,8 @@ machine:
             gateway: ${network_gateway}
         vip:
           ip: ${vip_shared_ip}
+  nodeLabels:
+    node-role.kubernetes.io/control-plane: ""
 cluster:
   allowSchedulingOnControlPlanes: false
   network:

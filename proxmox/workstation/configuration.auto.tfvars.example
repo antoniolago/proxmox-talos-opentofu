@@ -1,0 +1,50 @@
+# Proxmox Connection
+proxmox_api_url          = "https://192.168.88.240:8006/api2/json"
+proxmox_api_token_id     = "root@pam!opentofu"
+proxmox_api_token_secret = "your-api-token-secret"
+proxmox_target_node      = "ton01"
+proxmox_storage_device   = "local-lvm"
+
+# VM Configuration
+vm_name        = "dev-workstation"
+vm_description = "Ubuntu Server + i3wm Development Workstation"
+vm_memory      = 8192   # 8GB RAM
+vm_cpu_cores   = 4      # 4 CPU cores
+vm_disk_size   = "40G"  # 40GB disk
+
+# Network Configuration
+vm_ip_address      = "192.168.88.50"
+network_gateway    = "192.168.88.1"
+network_cidr       = 24
+domain_name_server = "192.168.88.1"
+vlan_tag           = 0
+
+# Ubuntu Cloud Image
+# Using Ubuntu 24.04 LTS (Noble Numbat) cloud image
+ubuntu_cloud_image_url      = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+ubuntu_cloud_image_filename = "ubuntu-24.04-cloudimg-amd64.img"
+
+# User Configuration
+vm_username = "dev"
+vm_password = ""  # Leave empty to use SSH key only (recommended)
+
+# SSH Configuration
+ssh_public_key_path  = "~/.ssh/id_ed25519.pub"
+ssh_private_key_path = "~/.ssh/id_ed25519"
+configure_ssh_config = true
+ssh_config_path      = "~/.ssh/config"
+
+# Software Installation
+install_docker = true
+install_vscode = true
+
+# Additional packages to install (optional)
+additional_packages = [
+  # "postgresql-client",
+  # "redis-tools",
+  # "kubectl",
+]
+
+# Locale and Timezone
+timezone = "America/Sao_Paulo"
+locale   = "en_US.UTF-8"

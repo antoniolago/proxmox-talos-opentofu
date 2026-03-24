@@ -1,0 +1,1 @@
+tofu apply -replace='talos_machine_configuration_apply.worker["192.168.88.206"]'

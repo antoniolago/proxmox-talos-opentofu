@@ -42,6 +42,17 @@ variable "vaultwarden_master_password" {
   sensitive = true
   description = "Vaultwarden master password"
 }
+variable "vaultwarden_admin_token" {
+  type      = string
+  sensitive = true
+  description = "vaultwarden_admin_token"
+}
+variable "vaultwarden_postgres_password" {
+  type      = string
+  sensitive = true
+  description = "vaultwarden_postgres_password"
+}
+
 
 variable "vaultwarden_chart_version" {
   type        = string

@@ -29,6 +29,8 @@ machine:
         routes:
           - network: ${network}
             gateway: ${network_gateway}
+  nodeLabels:
+    node-role.kubernetes.io/worker: ""
 cluster:
   network:
     #cni:

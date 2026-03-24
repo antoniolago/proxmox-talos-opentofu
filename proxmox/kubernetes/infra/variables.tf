@@ -74,6 +74,13 @@ variable "node_data" {
       cpu_cores     = optional(number, 2)
       disk_size     = optional(string, "50G")
       target_node   = optional(string)
+      pci_devices = optional(list(object({
+        id         = string
+        mapping_id = string
+        pcie       = optional(bool, false)
+        rombar     = optional(bool, true)
+      })), [])
+      machine_config_extra = optional(string, "")
     }))
   })
   default = {
