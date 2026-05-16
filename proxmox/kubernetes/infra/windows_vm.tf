@@ -64,6 +64,16 @@ resource "proxmox_vm_qemu" "windows" {
     }
   }
 
+  # Auto-unattended answer ISO (ide1) — autounattend.xml + setup.ps1
+  dynamic "disk" {
+    for_each = var.windows_vm.auto_iso != "" ? [1] : []
+    content {
+      slot = "ide1"
+      type = "cdrom"
+      iso  = "${var.windows_vm.iso_storage}:iso/${var.windows_vm.auto_iso}"
+    }
+  }
+
   # Cloud-init (ide3)
   disk {
     slot    = "ide3"
@@ -97,6 +107,7 @@ resource "proxmox_vm_qemu" "windows" {
       disk[1].format,
       disk[2].format,
       disk[3].format,
+      disk[4].format,
     ]
   }
 }

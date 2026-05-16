@@ -139,6 +139,7 @@ variable "windows_vm" {
     iso_storage     = optional(string, "local")
     windows_iso     = optional(string, "")
     virtio_iso      = optional(string, "")
+    auto_iso        = optional(string, "")
   })
   default = {
     enabled = false
