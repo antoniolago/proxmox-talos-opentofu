@@ -205,29 +205,23 @@ resource "kubernetes_secret" "vaultwarden_server_credentials" {
   type = "Opaque"
 }
 
-resource "helm_release" "vaultwarden_kubernetes_secrets" {
-  depends_on       = [kubernetes_secret.vaultwarden_credentials]
-  name             = "vaultwarden-kubernetes-secrets"
-  namespace        = var.vaultwarden_namespace
-  create_namespace = false
-  chart            = "vaultwarden-kubernetes-secrets"
-  repository       = "oci://ghcr.io/antoniolago/charts"
-  version          = var.vaultwarden_chart_version
-  timeout          = 600
-  wait             = false
-  wait_for_jobs    = false
+resource "kubernetes_namespace" "domain_vars" {
+  metadata {
+    name = "domain-vars"
+  }
+}
 
-  values = [
-    yamlencode({
-      env = {
-        config = {
-          VAULTWARDEN__SERVERURL = var.vaultwarden_server_url
-        }
-      }
-      image = {
-        tag = var.vaultwarden_chart_version
-      }
-    })
-  ]
+resource "kubernetes_secret" "cloudflare_secrets" {
+  depends_on = [kubernetes_namespace.domain_vars]
+  metadata {
+    name      = "cloudflare-secrets"
+    namespace = kubernetes_namespace.domain_vars.metadata[0].name
+  }
+
+  data = {
+    cloudflare-token = var.cloudflare_token
+  }
+
+  type = "Opaque"
 }
 

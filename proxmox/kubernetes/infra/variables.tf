@@ -22,18 +22,40 @@ variable "proxmox_storage_device" {
 
 variable "talos_version" {
   type    = string
-  default = "1.12.1"
+  default = "1.13.0"
 }
 
 variable "kubernetes_version" {
   type    = string
-  default = "1.35.0"
+  default = "1.36.0"
+}
+
+data "talos_image_factory_extensions_versions" "this" {
+  talos_version = var.talos_version
+  filters = {
+    names = [
+      "binfmt-misc",
+      "qemu-guest-agent",
+    ]
+  }
+}
+
+resource "talos_image_factory_schematic" "this" {
+  schematic = yamlencode(
+    {
+      customization = {
+        systemExtensions = {
+          officialExtensions = data.talos_image_factory_extensions_versions.this.extensions_info.*.name
+        }
+      }
+    }
+  )
 }
 
 variable "talos_linux_iso_image_url" {
   description = "URL of the Talos ISO image for initially booting the VM"
   type        = string
-  default     = "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.12.1/nocloud-amd64.iso"
+  default     = ""
 }
 
 variable "talos_linux_iso_image_filename" {
@@ -59,7 +81,7 @@ variable "node_data" {
   type = object({
     controlplanes = map(object({
       install_disk  = string
-      install_image = string
+      install_image = optional(string)
       hostname      = optional(string)
       memory        = optional(number, 8192)
       cpu_cores     = optional(number, 2)
@@ -68,7 +90,7 @@ variable "node_data" {
     }))
     workers = map(object({
       install_disk  = string
-      install_image = string
+      install_image = optional(string)
       hostname      = optional(string)
       memory        = optional(number, 16384)
       cpu_cores     = optional(number, 2)
@@ -87,15 +109,39 @@ variable "node_data" {
     controlplanes = {
       "192.168.1.101" = {
         install_disk  = "/dev/vda"
-        install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       },
     }
     workers = {
       "192.168.1.102" = {
         install_disk  = "/dev/vda"
-        install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       },
     }
+  }
+}
+
+variable "windows_vm" {
+  description = "Configuration for a standalone Windows VM with GPU passthrough"
+  type = object({
+    enabled      = optional(bool, false)
+    target_node  = optional(string, "ton03")
+    vmid         = optional(number, 110)
+    name         = optional(string, "windows-gpu")
+    memory       = optional(number, 16384)
+    cpu_cores    = optional(number, 4)
+    disk_size    = optional(string, "100G")
+    ip_address   = optional(string, "")
+    pci_devices  = optional(list(object({
+      id         = string
+      mapping_id = string
+      pcie       = optional(bool, false)
+      rombar     = optional(bool, true)
+    })), [])
+    iso_storage     = optional(string, "local")
+    windows_iso     = optional(string, "")
+    virtio_iso      = optional(string, "")
+  })
+  default = {
+    enabled = false
   }
 }
 
@@ -147,3 +193,8 @@ variable "cilium_version" {
   default     = "1.18.5"
 }
 
+variable "auto_replace_vms_on_schematic_change" {
+  description = "If true, automatically replace VMs when the Talos schematic changes. Set to false to manually control when nodes are replaced."
+  type        = bool
+  default     = true
+}

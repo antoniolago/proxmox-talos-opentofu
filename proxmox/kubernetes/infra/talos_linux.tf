@@ -34,7 +34,7 @@ resource "talos_machine_configuration_apply" "controlplane" {
     templatefile("${path.module}/templates/machine_config_patches_controlplane.tftpl", {
       hostname             = each.value.hostname == null ? format("%s-cp-%s", var.cluster_name, index(keys(var.node_data.controlplanes), each.key)) : each.value.hostname
       install_disk         = each.value.install_disk
-      install_image        = each.value.install_image
+      install_image        = each.value.install_image != null ? each.value.install_image : local.talos_linux_install_image_url
       dns                  = var.domain_name_server
       ip_address           = "${each.key}/24"
       network              = var.network
@@ -54,7 +54,7 @@ resource "talos_machine_configuration_apply" "worker" {
     templatefile("${path.module}/templates/machine_config_patches_worker.tftpl", {
       hostname        = each.value.hostname == null ? format("%s-worker-%s", var.cluster_name, index(keys(var.node_data.workers), each.key)) : each.value.hostname
       install_disk    = each.value.install_disk
-      install_image   = each.value.install_image
+      install_image   = each.value.install_image != null ? each.value.install_image : local.talos_linux_install_image_url
       dns             = var.domain_name_server
       ip_address      = "${each.key}/24"
       network         = var.network

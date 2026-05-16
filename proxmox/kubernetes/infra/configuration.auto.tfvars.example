@@ -6,23 +6,21 @@ proxmox_target_node = "ton"
 proxmox_storage_device   = "local-lvm"
 
 # Talos Linux
-# Talos version needs to correspond to the install_image version in node_data
-# See: https://github.com/siderolabs/terraform-provider-talos/blob/main/docs/data-sources/machine_configuration.md
-talos_version                  = "1.12.1"
-kubernetes_version             = "1.35.0"
-# With these variables you can configure the ISO images which are uploaded to Proxmox for initially booting the VMs
-talos_linux_iso_image_url = "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.12.1/nocloud-amd64.iso"
-talos_linux_iso_image_filename = "nocloud-amd64.iso"
+# Set the desired Talos version - the schematic and ISO will be generated dynamically
+talos_version                  = "1.13.0"
+kubernetes_version             = "1.36.0"
+# Optional: Override the auto-generated ISO URL if you have a custom image
+# talos_linux_iso_image_url = ""
 # Name of the cluster
 cluster_name = "ton-cluster"
-# VIP address for the control planes, see https://www.talos.dev/v1.11/talos-guides/network/vip/
+# VIP address for the control planes, see https://www.talos.dev/v1.13/talos-guides/network/vip/
 cluster_vip_shared_ip = "192.168.88.200"
 # The node configuration with granular resource allocation, adjust it to your liking
+# Note: install_image is optional. If omitted, it will be auto-generated from the schematic.
 node_data = {
   controlplanes = {
     "192.168.88.201" = {
       install_disk  = "/dev/vda"
-      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       memory        = 5056   # 8GB RAM
       cpu_cores     = 1      # 2 CPU cores
       disk_size     = "15G"  # 50GB disk
@@ -30,7 +28,6 @@ node_data = {
     },
     "192.168.88.202" = {
       install_disk  = "/dev/vda"
-      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       memory        = 5056   # 8GB RAM
       cpu_cores     = 1      # 2 CPU cores
       disk_size     = "15G"  # 50GB disk
@@ -38,7 +35,6 @@ node_data = {
     },
     "192.168.88.203" = {
       install_disk  = "/dev/vda"
-      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       memory        = 3056   # 8GB RAM
       cpu_cores     = 2      # 2 CPU cores
       disk_size     = "15G"  # 50GB disk
@@ -48,7 +44,6 @@ node_data = {
   workers = {
     "192.168.88.204" = {
       install_disk  = "/dev/vda"
-      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       memory        = 10384  
       cpu_cores     = 6      
       disk_size     = "100G" # 100GB disk
@@ -56,7 +51,6 @@ node_data = {
     },
     "192.168.88.205" = {
       install_disk  = "/dev/vda"
-      install_image = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.12.1"
       memory        = 10384  # 32GB RAM
       cpu_cores     = 3      # 8 CPU cores
       disk_size     = "100G" # 200GB disk
@@ -64,7 +58,6 @@ node_data = {
     },
     "192.168.88.206" = {
       install_disk  = "/dev/vda"
-      install_image = "factory.talos.dev/nocloud-installer/9c1d1b442d73f96dcd04e81463eb20000ab014062d22e1b083e1773336bc1dd5:v1.12.4"
       target_node   = "ton03"
       #pci_devices = [
       #  {

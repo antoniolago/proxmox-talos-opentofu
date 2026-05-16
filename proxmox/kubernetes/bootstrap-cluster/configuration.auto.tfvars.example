@@ -8,12 +8,6 @@ github_username = "your-github-username"
 github_password = "your-github-personal-access-token"
 
 # Vaultwarden Kubernetes Secrets
-vaultwarden_server_url      = "https://your-vaultwarden-server.com"
 vaultwarden_client_id       = "<your_client_id>"
 vaultwarden_client_secret   = "<your_client_secret>"
 vaultwarden_master_password = "<your_master_password>"
-vaultwarden_chart_version   = "1.0.2"
-vaultwarden_namespace       = "vaultwarden-kubernetes-secrets"
-
-postgres_password = "your_postgres_password"
-admin_token = "your_admin_token"

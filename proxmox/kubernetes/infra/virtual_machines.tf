@@ -1,4 +1,5 @@
 resource "proxmox_vm_qemu" "kubernetes_control_plane" {
+  depends_on  = [null_resource.talos_linux_iso_image]
   for_each    = var.node_data.controlplanes
   name        = format("%s-k8s-control-plane-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.controlplanes), each.key))
   description = "Kubernetes Control Plane"
@@ -27,7 +28,7 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
   disk {
     slot = "ide2"
     type = "cdrom"
-    iso  = "local:iso/${var.talos_linux_iso_image_filename}"
+    iso  = "local:iso/${local.talos_linux_iso_image_filename_dynamic}"
   }
 
   disk {
@@ -55,6 +56,8 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
       disk[1].format,
       disk[2].format,
     ]
+    # Control planes: Manual replacement recommended to preserve etcd quorum
+    # Replace one at a time using: tofu taint 'proxmox_vm_qemu.kubernetes_control_plane["<ip>"]'
   }
   startup_shutdown {
     order            = -1
@@ -65,6 +68,7 @@ resource "proxmox_vm_qemu" "kubernetes_control_plane" {
 
 
 resource "proxmox_vm_qemu" "kubernetes_worker" {
+  depends_on  = [null_resource.talos_linux_iso_image]
   for_each    = var.node_data.workers
   name        = format("%s-k8s-worker-%s", replace(var.cluster_name, " ", "-"), index(keys(var.node_data.workers), each.key))
   description = "Kubernetes Worker Node"
@@ -99,7 +103,7 @@ resource "proxmox_vm_qemu" "kubernetes_worker" {
   disk {
     slot = "ide2"
     type = "cdrom"
-    iso  = "local:iso/${var.talos_linux_iso_image_filename}"
+    iso  = "local:iso/${local.talos_linux_iso_image_filename_dynamic}"
   }
 
   disk {
@@ -147,5 +151,7 @@ resource "proxmox_vm_qemu" "kubernetes_worker" {
       disk[1].format,
       disk[2].format,
     ]
+    # Workers: Auto-replace when schematic changes (safe - workloads will reschedule)
+    replace_triggered_by = [talos_image_factory_schematic.this]
   }
 }
