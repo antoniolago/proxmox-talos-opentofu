@@ -216,7 +216,11 @@ resource "null_resource" "setup_ubuntu_gpu" {
       echo "=== Checking GPU visibility ==="
       ssh ubuntu@$NODE "sudo lspci -nn | grep -i amd || echo 'No AMD GPU found via lspci'"
 
-      # Step 6: Join cluster via kubeadm
+      # Step 6: Delete old Talos worker-2 node if it exists
+      echo "=== Cleaning up old Talos worker-2 (if exists) ==="
+      kubectl --kubeconfig="$KCFG" delete node ton-cluster-k8s-worker-2 --ignore-not-found 2>/dev/null || true
+
+      # Step 7: Join cluster via kubeadm
       echo "=== Joining Talos cluster ==="
       TOKEN=$(openssl rand -hex 3).$(openssl rand -hex 8)
       kubectl --kubeconfig="$KCFG" create secret generic "bootstrap-token-$${TOKEN%.*}" -n kube-system \
