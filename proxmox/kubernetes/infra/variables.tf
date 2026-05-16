@@ -146,6 +146,31 @@ variable "windows_vm" {
   }
 }
 
+variable "ubuntu_gpu_worker" {
+  description = "Ubuntu worker VM with GPU passthrough that joins the Talos cluster"
+  type = object({
+    enabled      = optional(bool, false)
+    target_node  = optional(string, "ton03")
+    vmid         = optional(number, 120)
+    name         = optional(string, "ubuntu-gpu-worker")
+    memory       = optional(number, 16384)
+    cpu_cores    = optional(number, 4)
+    disk_size    = optional(string, "120G")
+    ip_address   = optional(string, "192.168.88.220")
+    gateway      = optional(string, "192.168.88.1")
+    dns          = optional(string, "192.168.88.1")
+    bridge       = optional(string, "vmbr0")
+    ssh_keys     = optional(list(string), [])
+    pci_devices  = optional(list(object({
+      id         = string
+      mapping_id = string
+      pcie       = optional(bool, false)
+      rombar     = optional(bool, true)
+    })), [])
+  })
+  default = { enabled = false }
+}
+
 variable "network" {
   description = "Network for all nodes"
   type        = string
