@@ -1,5 +1,25 @@
 # Ubuntu GPU Worker — joins the Talos cluster automatically
 # Receives the AMD GPU via PCI passthrough for KubeVirt nested VFIO
+resource "null_resource" "ubuntu_cloud_image" {
+  count = var.ubuntu_gpu_worker.enabled ? 1 : 0
+  triggers = {
+    url = "https://cloud-images.ubuntu.com/releases/24.10/release/ubuntu-24.10-server-cloudimg-amd64.img"
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      set -e
+      IMG="/var/lib/vz/template/iso/ubuntu-24.10-server-cloudimg-amd64.img"
+      if [ ! -f "$IMG" ]; then
+        wget -q --show-progress -O "$IMG" \
+          "https://cloud-images.ubuntu.com/releases/24.10/release/ubuntu-24.10-server-cloudimg-amd64.img"
+      fi
+      echo "Image ready: $(ls -lh $IMG | awk '{print $5}')"
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+}
+
+# Ubuntu GPU Worker
 resource "proxmox_vm_qemu" "ubuntu_gpu_worker" {
   count       = var.ubuntu_gpu_worker.enabled ? 1 : 0
   name        = var.ubuntu_gpu_worker.name
