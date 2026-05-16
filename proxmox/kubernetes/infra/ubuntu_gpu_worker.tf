@@ -1,9 +1,11 @@
 # Ubuntu GPU Worker — joins the Talos cluster automatically
 # Receives the AMD GPU via PCI passthrough for KubeVirt nested VFIO
-# Architecture:
-#   1. Creates Proxmox template from Ubuntu cloud image (one-time)
-#   2. Clones VM from template with GPU passthrough + cloud-init
-#   3. Configures vIOMMU and joins cluster via kubeadm
+#
+# Bash variable escaping in heredocs (OpenTofu):
+#   $VAR       → literal, bash expands   ✓ (when followed by space, end, or :)
+#   $$VAR      → PID + "VAR" IN BASH     ✗
+#   $${VAR}    → HCL escapes to ${VAR}   ✓ (use when adjacent to alphanum chars)
+#   ${VAR}     → HCL tries to resolve    ✗
 
 locals {
   ubuntu_gpu_enabled        = var.ubuntu_gpu_worker.enabled
@@ -27,11 +29,11 @@ resource "null_resource" "ubuntu_cloud_image" {
       set -e
       NODE="192.168.88.242"
       IMG="${local.ubuntu_cloud_image_file}"
-      if ! ssh root@$$NODE "[ -f $$IMG ]" 2>/dev/null; then
+      if ! ssh root@$NODE "[ -f $IMG ]" 2>/dev/null; then
         echo "=== Downloading Ubuntu cloud image on ton03 ==="
-        ssh root@$$NODE "wget -q --show-progress -O $$IMG '${local.ubuntu_cloud_image_url}'"
+        ssh root@$NODE "wget -q --show-progress -O $IMG '${local.ubuntu_cloud_image_url}'"
       fi
-      echo "Image: $$(ssh root@$$NODE "ls -lh $$IMG | awk '{print \$$5}'")"
+      echo "Image: $(ssh root@$NODE "ls -lh $IMG | awk '{print \$5}'")"
     EOT
     interpreter = ["bash", "-c"]
   }
@@ -55,24 +57,23 @@ resource "null_resource" "create_ubuntu_template" {
       STORAGE="${var.proxmox_storage_device}"
 
       # Check if template already exists
-      if ssh root@$$NODE "qm list 2>/dev/null | grep -qw $${VMID}"; then
-        echo "=== Template '$$NAME' already exists (VMID $${VMID}) ==="
+      if ssh root@$NODE "qm list 2>/dev/null | grep -qw $VMID"; then
+        echo "=== Template '$NAME' already exists (VMID $VMID) ==="
         exit 0
       fi
 
       echo "=== Copying cloud-init snippet to Proxmox ==="
-      ssh root@$$NODE "mkdir -p /var/lib/vz/snippets"
-      scp "${path.module}/templates/cloud-init-ubuntu-gpu.yaml" root@$$NODE:/var/lib/vz/snippets/
+      ssh root@$NODE "mkdir -p /var/lib/vz/snippets"
+      scp "${path.module}/templates/cloud-init-ubuntu-gpu.yaml" root@$NODE:/var/lib/vz/snippets/
 
-      echo "=== Creating Proxmox template '$$NAME' ==="
-      ssh root@$$NODE "
-        qm create $${VMID} --memory 2048 --net0 virtio,bridge=vmbr0 --name $${NAME}
-        qm importdisk $${VMID} $${IMG} $${STORAGE}
-        qm set $${VMID} --scsihw virtio-scsi-pci --virtio0 $${STORAGE}:vm-$${VMID}-disk-0
-        qm set $${VMID} --ide2 $${STORAGE}:cloudinit
-        qm set $${VMID} --boot order=virtio0
-        qm set $${VMID} --serial0 socket --vga serial0
-        qm template $${VMID}
+      echo "=== Creating Proxmox template '$NAME' ==="
+      ssh root@$NODE "
+        qm create $VMID --memory 2048 --net0 virtio,bridge=vmbr0 --name $NAME
+        qm importdisk $VMID $IMG $STORAGE
+        qm set $VMID --scsihw virtio-scsi-pci --virtio0 $STORAGE:vm-$VMID-disk-0
+        qm set $VMID --boot order=virtio0
+        qm set $VMID --serial0 socket --vga serial0
+        qm template $VMID
       "
       echo "=== Template created! ==="
     EOT
@@ -80,7 +81,7 @@ resource "null_resource" "create_ubuntu_template" {
   }
 }
 
-# Step 3: Clone VM from template with GPU passthrough + cloud-init
+# Step 3: Clone VM from template (stopped — null_resource configures GPU+boot)
 resource "proxmox_vm_qemu" "ubuntu_gpu_worker" {
   count       = local.ubuntu_gpu_enabled ? 1 : 0
   depends_on  = [null_resource.create_ubuntu_template]
@@ -89,16 +90,16 @@ resource "proxmox_vm_qemu" "ubuntu_gpu_worker" {
   name        = var.ubuntu_gpu_worker.name
   description = "Ubuntu worker with AMD GPU passthrough for KubeVirt"
 
-  clone      = local.ubuntu_template_name
-  full_clone = true
+  clone        = local.ubuntu_template_name
+  full_clone   = true
+  force_create = true
 
   agent    = 1
-  vm_state = "running"
+  vm_state = "stopped"  # null_resource.setup_ubuntu_gpu starts it after GPU config
   start_at_node_boot = true
   memory   = var.ubuntu_gpu_worker.memory
   machine  = "q35"
   bios     = "ovmf"
-  boot     = "order=virtio0;ide2"
 
   cpu {
     cores = var.ubuntu_gpu_worker.cpu_cores
@@ -106,6 +107,15 @@ resource "proxmox_vm_qemu" "ubuntu_gpu_worker" {
   }
 
   vga { type = "std" }
+
+  # Preserve template's root disk (virtio0) — resized by null_resource
+  disk {
+    slot    = "virtio0"
+    type    = "disk"
+    storage = var.proxmox_storage_device
+    size    = var.ubuntu_gpu_worker.disk_size
+    discard = true
+  }
 
   # Cloud-init via cicustom + provider fields
   os_type    = "cloud-init"
@@ -123,24 +133,6 @@ resource "proxmox_vm_qemu" "ubuntu_gpu_worker" {
     bridge = var.ubuntu_gpu_worker.bridge
   }
 
-  # Cloud-init ISO
-  disk {
-    slot    = "ide2"
-    type    = "cloudinit"
-    storage = var.proxmox_storage_device
-  }
-
-  # GPU passthrough
-  dynamic "pci" {
-    for_each = var.ubuntu_gpu_worker.pci_devices
-    content {
-      id         = pci.value.id
-      mapping_id = pci.value.mapping_id
-      pcie       = pci.value.pcie
-      rombar     = pci.value.rombar
-    }
-  }
-
   # EFI disk for OVMF boot
   efidisk {
     efitype = "4m"
@@ -149,12 +141,15 @@ resource "proxmox_vm_qemu" "ubuntu_gpu_worker" {
 
   lifecycle {
     ignore_changes = [
-      cicustom, ciuser, cipassword, sshkeys,
+      cicustom, ciuser, cipassword, sshkeys, disk[0].format,
+      # GPU config is managed by setup_ubuntu_gpu (raw PCI + x-vga=on)
+      # viommu is managed by setup_ubuntu_gpu
+      # vm_state is managed by setup_ubuntu_gpu
     ]
   }
 }
 
-# Step 4: Configure vIOMMU + join cluster via kubeadm
+# Step 4: Configure GPU (x-vga=on), viommu, start, join cluster
 resource "null_resource" "setup_ubuntu_gpu" {
   count = local.ubuntu_gpu_enabled ? 1 : 0
   depends_on = [proxmox_vm_qemu.ubuntu_gpu_worker]
@@ -174,16 +169,28 @@ resource "null_resource" "setup_ubuntu_gpu" {
       VIP="${var.cluster_vip_shared_ip}"
       KCFG="${abspath(path.module)}/.csr-kubeconfig"
       PVE_HOST="192.168.88.242"
+      DISK_SIZE="${var.ubuntu_gpu_worker.disk_size}"
 
-      # Step 1: Stop VM, set viommu=intel, resize disk, start
-      echo "=== Configuring vIOMMU + resizing disk on ton03 ==="
-      ssh root@$$PVE_HOST "qm stop $${VMID} --skiplock 2>/dev/null; sleep 2; qm set $${VMID} -machine 'q35,viommu=intel'; qm resize $${VMID} virtio0 ${var.ubuntu_gpu_worker.disk_size}; qm start $${VMID}" || true
+      # Step 1: Configure GPU with x-vga=on + viommu + disk resize
+      # GPU must use raw PCI with x-vga=on — AMD Renoir/Vega crashes without it
+      echo "=== Configuring GPU (raw PCI + x-vga=on) + vIOMMU ==="
+      ssh root@$PVE_HOST "
+        qm stop $VMID --skiplock 2>/dev/null || true
+        sleep 2
+        # Replace mapping with raw PCI + x-vga=on
+        qm set $VMID --delete hostpci0 2>/dev/null || true
+        qm set $VMID -hostpci0 '0000:09:00.0,pcie=1,x-vga=on'
+        qm set $VMID -hostpci1 '0000:09:00.1,pcie=1'
+        qm set $VMID -machine 'q35,viommu=intel'
+        qm resize $VMID virtio0 $DISK_SIZE
+        qm start $VMID
+      " || true
 
       # Step 2: Wait for SSH (cloud-init first boot — installing packages)
       echo "=== Waiting for SSH (phase 1 — cloud-init) ==="
-      for i in $$(seq 1 60); do
-        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@$$NODE "echo ready" 2>/dev/null; then
-          echo "SSH ready after $${i} x 10s"
+      for i in $(seq 1 60); do
+        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@$NODE "echo ready" 2>/dev/null; then
+          echo "SSH ready after $(( i * 10 ))s"
           break
         fi
         sleep 10
@@ -193,9 +200,9 @@ resource "null_resource" "setup_ubuntu_gpu" {
       echo "=== Waiting for cloud-init to complete + VM reboot ==="
       sleep 90
       echo "=== Waiting for SSH (phase 2 — after reboot) ==="
-      for i in $$(seq 1 60); do
-        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@$$NODE "echo ready" 2>/dev/null; then
-          echo "SSH ready after $${i} x 10s"
+      for i in $(seq 1 60); do
+        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@$NODE "echo ready" 2>/dev/null; then
+          echo "SSH ready after $(( i * 10 ))s"
           break
         fi
         sleep 10
@@ -203,35 +210,35 @@ resource "null_resource" "setup_ubuntu_gpu" {
 
       # Step 4: Verify VFIO modules are loaded
       echo "=== Verifying VFIO modules ==="
-      ssh ubuntu@$$NODE "sudo lsmod | grep vfio || echo 'WARNING: VFIO modules not loaded!'"
+      ssh ubuntu@$NODE "sudo lsmod | grep vfio || echo 'WARNING: VFIO modules not loaded!'"
 
       # Step 5: Check GPU is visible
       echo "=== Checking GPU visibility ==="
-      ssh ubuntu@$$NODE "sudo lspci -nn | grep -i amd || echo 'No AMD GPU found via lspci'"
+      ssh ubuntu@$NODE "sudo lspci -nn | grep -i amd || echo 'No AMD GPU found via lspci'"
 
       # Step 6: Join cluster via kubeadm
       echo "=== Joining Talos cluster ==="
       TOKEN=$(openssl rand -hex 3).$(openssl rand -hex 8)
-      kubectl --kubeconfig="$$KCFG" create secret generic "bootstrap-token-$${TOKEN%.*}" -n kube-system \
+      kubectl --kubeconfig="$KCFG" create secret generic "bootstrap-token-$${TOKEN%.*}" -n kube-system \
         --type="bootstrap.kubernetes.io/token" \
         --from-literal="token-id=$${TOKEN%.*}" \
         --from-literal="token-secret=$${TOKEN#*.}" \
         --from-literal="usage-bootstrap-authentication=true" \
         --from-literal="usage-bootstrap-signing=true" 2>/dev/null || true
 
-      ssh ubuntu@$$NODE "sudo kubeadm join $${VIP}:6443 \
-        --token $${TOKEN} \
+      ssh ubuntu@$NODE "sudo kubeadm join $VIP:6443 \
+        --token $TOKEN \
         --discovery-token-unsafe-skip-ca-verification \
-        --node-name=$${NAME} \
+        --node-name=$NAME \
         --ignore-preflight-errors=All" 2>&1
 
       # Step 7: Label the node
       echo "=== Labeling node ==="
-      kubectl --kubeconfig="$$KCFG" label node $${NAME} node-role.kubernetes.io/worker="" --overwrite 2>/dev/null || true
+      kubectl --kubeconfig="$KCFG" label node $NAME node-role.kubernetes.io/worker="" --overwrite 2>/dev/null || true
 
       echo "====================================================="
       echo "  DONE: Ubuntu GPU worker joined the cluster!"
-      echo "  Node: $${NAME}"
+      echo "  Node: $NAME"
       echo "  GPU:  AMD Radeon (1002:1636) via PCI passthrough"
       echo "====================================================="
       echo ""
