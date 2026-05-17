@@ -1,9 +1,10 @@
-# GPU Worker LXC — joins the Talos cluster via kubeadm
+  # GPU worker LXC — joins the Talos cluster via kubeadm
 # Architecture:
 #   Proxmox host (amdgpu /dev/dri)
 #     └─ LXC privilegiado (kubeadm join → Talos cluster)
 #          ├─ /dev/dri montado do host → pods acessam GPU
 #          └─ kubelet + containerd para workloads GPU
+
 locals {
   lxc_gpu_enabled = true
   lxc_gpu_vmid    = 130
@@ -35,7 +36,7 @@ resource "null_resource" "lxc_ubuntu_template" {
   }
 }
 
-# Create GPU worker LXC
+# GPU worker LXC
 resource "proxmox_lxc" "gpu_worker" {
   count       = local.lxc_gpu_enabled ? 1 : 0
   depends_on  = [null_resource.lxc_ubuntu_template]
@@ -45,11 +46,12 @@ resource "proxmox_lxc" "gpu_worker" {
   ostemplate  = "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
   password    = "ubuntu"
   unprivileged = false
-  memory      = local.lxc_gpu_memory
-  cores       = local.lxc_gpu_cores
-  swap        = 2048
-  description = "GPU worker with amdgpu via /dev/dri, joins Talos cluster"
-  tags        = "gpu,worker,kubeadm"
+  force        = true
+  memory       = local.lxc_gpu_memory
+  cores        = local.lxc_gpu_cores
+  swap         = 2048
+  description  = "GPU worker with amdgpu via /dev/dri, joins Talos cluster"
+  tags         = "gpu,worker,kubeadm"
 
   # Networking
   network {
@@ -66,20 +68,19 @@ resource "proxmox_lxc" "gpu_worker" {
     size    = local.lxc_gpu_disk
   }
 
-  # Features
-  features {
-    nesting = true
-    fuse    = true
-    keyctl  = true
-  }
-
   # SSH key for management
   ssh_public_keys = join("\n", var.ubuntu_gpu_worker.ssh_keys)
 
   # Run on Proxmox host boot
   onboot = true
-
   startup = "order=3"
+
+  # Prevent tofu from trying to update what the API token can't
+  lifecycle {
+    ignore_changes = [
+      features, password, unprivileged, ssh_public_keys,
+    ]
+  }
 }
 
 # Setup: install kubelet + kubeadm + containerd + join cluster
@@ -110,11 +111,7 @@ resource "null_resource" "setup_lxc_gpu" {
         sleep 10
       done
 
-      # Step 2: Configure bind mounts for GPU (/dev/dri + /dev/kvm)
-      echo "=== Configuring bind mounts on LXC ==="
-      ssh root@192.168.88.242 "pct set ${local.lxc_gpu_vmid} -mp0 /dev/dri,mp=/dev/dri 2>/dev/null; pct set ${local.lxc_gpu_vmid} -mp1 /dev/kvm,mp=/dev/kvm 2>/dev/null; pct reboot ${local.lxc_gpu_vmid} 2>/dev/null; sleep 10" || true
-
-      # Step 3: Install kubelet, kubeadm, containerd
+      # Step 2: Install kubelet, kubeadm, containerd
       echo "=== Installing k8s packages ==="
       ssh ubuntu@$NODE "sudo bash -c '
         set -e
@@ -123,7 +120,7 @@ resource "null_resource" "setup_lxc_gpu" {
 
         # Kubernetes apt repo
         curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /\" > /etc/apt/sources.list.d/kubernetes.list
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
         apt-get update -qq
         apt-get install -y -qq kubelet kubeadm kubectl
         apt-mark hold kubelet kubeadm kubectl
@@ -131,43 +128,41 @@ resource "null_resource" "setup_lxc_gpu" {
         # Configure containerd
         mkdir -p /etc/containerd
         containerd config default > /etc/containerd/config.toml
-        sed -i \"s/SystemdCgroup = false/SystemdCgroup = true/\" /etc/containerd/config.toml
+        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
         systemctl enable containerd
         systemctl start containerd
 
-        # Disable swap (requirement for kubelet)
+        # Disable swap
         swapoff -a
-        sed -i \"/ swap /d\" /etc/fstab || true
+        sed -i "/ swap /d" /etc/fstab || true
 
         # Enable modules
         modprobe overlay
         modprobe br_netfilter
-        echo \"overlay\" >> /etc/modules-load.d/k8s.conf
-        echo \"br_netfilter\" >> /etc/modules-load.d/k8s.conf
+        echo "overlay" >> /etc/modules-load.d/k8s.conf
+        echo "br_netfilter" >> /etc/modules-load.d/k8s.conf
 
         # sysctl
-        cat > /etc/sysctl.d/k8s.conf << \"SYSCTL\"
+        cat > /etc/sysctl.d/k8s.conf << "SYSCTL"
 net.bridge.bridge-nf-call-iptables = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 net.ipv4.ip_forward = 1
 SYSCTL
         sysctl --system
 
-        # Wait for containerd to be ready
+        # Wait for containerd
         sleep 5
-        ctr version >/dev/null 2>&1 || echo \"Warning: containerd not ready\"
-
-        echo \"INSTALL_DONE\"
+        ctr version >/dev/null 2>&1 || echo "Warning: containerd not ready"
+        echo "INSTALL_DONE"
       '" 2>&1
 
-      # Step 3: Verify GPU is visible (amdgpu)
+      # Step 3: Verify GPU is visible
       echo "=== Checking GPU access ==="
       ssh ubuntu@$NODE "ls -la /dev/dri/ 2>/dev/null || echo 'WARNING: no /dev/dri'"
 
-      # Step 4: Delete old Talos worker-2 node if it still exists
-      echo "=== Cleaning up old Talos node ==="
+      # Step 4: Delete old Talos nodes
+      echo "=== Cleaning up old nodes ==="
       kubectl --kubeconfig="$KCFG" delete node ton-cluster-k8s-worker-2 --ignore-not-found 2>/dev/null || true
-      kubectl --kubeconfig="$KCFG" delete node worker-2 --ignore-not-found 2>/dev/null || true
 
       # Step 5: Join cluster
       echo "=== Joining Talos cluster ==="
@@ -183,9 +178,9 @@ SYSCTL
         --token $TOKEN \
         --discovery-token-unsafe-skip-ca-verification \
         --node-name=$NAME \
-        --ignore-preflight-errors=All,SystemVerification,FileContent--proc-sys-net-bridge-bridge-nf-call-iptables,FileContent--proc-sys-net-ipv4-ip_forward" 2>&1
+        --ignore-preflight-errors=All,SystemVerification" 2>&1
 
-      # Step 6: Label the node
+      # Step 6: Label
       echo "=== Labeling node ==="
       kubectl --kubeconfig="$KCFG" label node $NAME node-role.kubernetes.io/worker="" --overwrite 2>/dev/null || true
       kubectl --kubeconfig="$KCFG" label node $NAME gpu.amd.com/node=lxc-gpu --overwrite 2>/dev/null || true
@@ -193,7 +188,6 @@ SYSCTL
       echo "====================================================="
       echo "  DONE: LXC GPU worker joined the cluster!"
       echo "  Node: $NAME"
-      echo "  GPU:  AMD Renoir via /dev/dri (amdgpu)"
       echo "  Label: gpu.amd.com/node=lxc-gpu"
       echo "====================================================="
     SCRIPT
