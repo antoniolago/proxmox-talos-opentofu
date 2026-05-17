@@ -34,6 +34,7 @@ data "talos_image_factory_extensions_versions" "this" {
   talos_version = var.talos_version
   filters = {
     names = [
+      "amdgpu",
       "binfmt-misc",
       "qemu-guest-agent",
     ]
