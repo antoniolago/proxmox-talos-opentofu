@@ -66,27 +66,11 @@ resource "proxmox_lxc" "gpu_worker" {
     size    = local.lxc_gpu_disk
   }
 
-  # Privileged features
+  # Features
   features {
     nesting = true
     fuse    = true
     keyctl  = true
-  }
-
-  # Bind mount /dev/dri from host (amdgpu GPU)
-  mountpoint {
-    slot   = 0
-    key    = "dev/dri"
-    mp     = "/dev/dri"
-    volume = "/dev/dri"
-  }
-
-  # Bind mount /dev/kvm for nested KVM
-  mountpoint {
-    slot   = 1
-    key    = "dev/kvm"
-    mp     = "/dev/kvm"
-    volume = "/dev/kvm"
   }
 
   # SSH key for management
@@ -126,7 +110,11 @@ resource "null_resource" "setup_lxc_gpu" {
         sleep 10
       done
 
-      # Step 2: Install kubelet, kubeadm, containerd
+      # Step 2: Configure bind mounts for GPU (/dev/dri + /dev/kvm)
+      echo "=== Configuring bind mounts on LXC ==="
+      ssh root@192.168.88.242 "pct set ${local.lxc_gpu_vmid} -mp0 /dev/dri,mp=/dev/dri 2>/dev/null; pct set ${local.lxc_gpu_vmid} -mp1 /dev/kvm,mp=/dev/kvm 2>/dev/null; pct reboot ${local.lxc_gpu_vmid} 2>/dev/null; sleep 10" || true
+
+      # Step 3: Install kubelet, kubeadm, containerd
       echo "=== Installing k8s packages ==="
       ssh ubuntu@$NODE "sudo bash -c '
         set -e
