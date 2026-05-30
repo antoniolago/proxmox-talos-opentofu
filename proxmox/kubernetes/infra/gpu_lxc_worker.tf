@@ -51,7 +51,7 @@ resource "null_resource" "create_lxc_gpu" {
       ssh root@$HOST "pct create $VMID $TEMPLATE \
         --hostname ${local.lxc_gpu_name} \
         --storage local-lvm \
-        --rootfs local-lvm:${local.lxc_gpu_disk} \
+        --rootfs local-lvm:${replace(local.lxc_gpu_disk, "G", "")} \\
         --memory ${local.lxc_gpu_memory} \
         --cores ${local.lxc_gpu_cores} \
         --swap 2048 \
@@ -144,10 +144,39 @@ lxc.cgroup2.devices.allow: c 10:229 rwm
 lxc.cgroup2.devices.allow: c 10:200 rwm
 lxc.mount.entry: /dev/kmsg dev/kmsg none bind,optional,create=file
 lxc.mount.entry: /dev/fuse dev/fuse none bind,optional,create=file
+# Kubelet requires write access to sysctls
+lxc.cgroup2.devices.allow: c 1:9 rwm
+lxc.mount.entry: /proc/sys/vm/overcommit_memory proc/sys/vm/overcommit_memory none bind,optional,create=file
+lxc.mount.entry: /proc/sys/kernel/panic proc/sys/kernel/panic none bind,optional,create=file
+lxc.mount.entry: /proc/sys/kernel/panic_on_oops proc/sys/kernel/panic_on_oops none bind,optional,create=file
 CONF"
       echo "LXC config written. Rebooting..."
+      # Ensure host sysctls are set for kubelet in LXC
+      ssh root@$HOST "echo 'vm.overcommit_memory=1' > /etc/sysctl.d/99-kubelet-lxc.conf && echo 'kernel.panic=10' >> /etc/sysctl.d/99-kubelet-lxc.conf && echo 'kernel.panic_on_oops=0' >> /etc/sysctl.d/99-kubelet-lxc.conf && sysctl -p /etc/sysctl.d/99-kubelet-lxc.conf" 2>/dev/null || true
       ssh root@$HOST "pct reboot $VMID" 2>/dev/null || true
       sleep 5
+      # Ensure LXC is running after reboot
+      ssh root@$HOST "pct start $VMID" 2>/dev/null || true
+      sleep 3
+      # Create ubuntu user (lost on LXC recreation)
+      ssh root@$HOST "pct exec $VMID -- useradd -m -s /bin/bash -G sudo ubuntu 2>/dev/null; echo 'ubuntu:ubuntu' | pct exec $VMID -- chpasswd; bash -c 'echo \"ubuntu ALL=(ALL) NOPASSWD:ALL\" | pct exec $VMID -- tee /etc/sudoers.d/ubuntu > /dev/null && pct exec $VMID -- chmod 440 /etc/sudoers.d/ubuntu'" 2>/dev/null || true
+      # Install KubePrism proxy (required by Talos flannel daemonset before kubelet starts)
+      ssh root@$HOST "pct exec $VMID -- apt-get install -y -qq socat 2>/dev/null" || true
+      ssh root@$HOST "pct exec $VMID -- bash -c 'cat > /etc/systemd/system/kubeprism-proxy.service << KPP
+[Unit]
+Description=KubePrism proxy for Talos (127.0.0.1:7445 -> API server)
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:7445,fork,reuseaddr TCP:192.168.88.200:6443
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+KPP
+systemctl daemon-reload
+systemctl enable kubeprism-proxy
+systemctl restart kubeprism-proxy'" 2>/dev/null || true
       echo "CONFIGURE_DONE"
     SCRIPT
     interpreter = ["bash", "-c"]
@@ -170,10 +199,9 @@ resource "null_resource" "setup_lxc_gpu" {
       NODE="${local.lxc_gpu_ip}"
       NAME="${local.lxc_gpu_name}"
       VIP="${var.cluster_vip_shared_ip}"
-      HOST="192.168.88.242"
       KCFG="${abspath(path.module)}/.csr-kubeconfig"
 
-      # Wait for LXC SSH (reboot may take time)
+      # Wait for LXC SSH
       echo "=== Waiting for LXC SSH ==="
       for i in $(seq 1 60); do
         if sshpass -p ubuntu ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@$NODE "echo ready" 2>/dev/null; then
@@ -183,62 +211,31 @@ resource "null_resource" "setup_lxc_gpu" {
         sleep 10
       done
 
-      echo "=== Installing k8s packages + fixing LXC limitations ==="
-      sshpass -p ubuntu ssh ubuntu@$NODE sudo bash -c '
-        set -e
-
-        apt-get update -qq
-        apt-get install -y -qq curl wget gnupg ca-certificates apt-transport-https jq containerd
-
-        # Kubernetes apt repo
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /\" > /etc/apt/sources.list.d/kubernetes.list
-        apt-get update -qq
-        apt-get install -y -qq kubelet kubeadm kubectl
-        apt-mark hold kubelet kubeadm kubectl
-
-        # === FIX 1: containerd - disable apparmor ===
-        mkdir -p /etc/containerd/conf.d
-        cat > /etc/containerd/conf.d/disable-apparmor.toml << \"C1\"
+      # Write setup script locally, SCP it, execute
+      echo "=== Generating setup script ==="
+      cat > /tmp/lxc-setup.sh << 'SCRIPT_B64'
+#!/bin/bash
+set -e
+apt-get update -qq
+apt-get install -y -qq curl wget gnupg ca-certificates apt-transport-https jq containerd
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+apt-get update -qq
+apt-get install -y -qq kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl
+mkdir -p /etc/containerd/conf.d
+cat > /etc/containerd/conf.d/disable-apparmor.toml << 'C1'
 version = 3
-[plugins.\"io.containerd.cri.v1.runtime\"]
+[plugins."io.containerd.cri.v1.runtime"]
   disable_apparmor = true
 C1
-
-        containerd config default > /etc/containerd/config.toml 2>/dev/null || true
-        sed -i \"s/SystemdCgroup = false/SystemdCgroup = true/\" /etc/containerd/config.toml
-        systemctl enable containerd
-        systemctl restart containerd
-
-        # === FIX 2: systemd-networkd override (LXC compat) ===
-        mkdir -p /etc/systemd/system/systemd-networkd.service.d/
-        cat > /etc/systemd/system/systemd-networkd.service.d/lxc-override.conf << \"C2\"
-[Service]
-ProtectSystem=no
-ProtectHome=no
-ProtectControlGroups=no
-ProtectKernelModules=no
-ProtectKernelLogs=no
-ProtectClock=no
-ProtectProc=default
-RestrictNamespaces=no
-LockPersonality=no
-MemoryDenyWriteExecute=no
-RestrictRealtime=no
-RestrictSUIDSGID=no
-SystemCallFilter=
-SystemCallErrorNumber=
-C2
-        systemctl daemon-reload
-        systemctl restart systemd-networkd
-
-        # === FIX 3: kubelet swap + config ===
-        echo \"KUBELET_EXTRA_ARGS=--fail-swap-on=false\" > /etc/default/kubelet
-        swapoff -a
-        sed -i \"/swap/d\" /etc/fstab || true
-
-        mkdir -p /var/lib/kubelet
-        cat > /var/lib/kubelet/config.yaml << \"C3\"
+containerd config default > /etc/containerd/config.toml 2>/dev/null || true
+sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
+systemctl enable containerd; systemctl restart containerd
+echo 'KUBELET_EXTRA_ARGS=--fail-swap-on=false' > /etc/default/kubelet
+swapoff -a 2>/dev/null || true
+mkdir -p /var/lib/kubelet
+cat > /var/lib/kubelet/config.yaml << 'C3'
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 cgroupDriver: systemd
@@ -248,126 +245,100 @@ clusterDomain: cluster.local
 serverTLSBootstrap: true
 rotateCertificates: true
 C3
+echo 'KUBELET_KUBEADM_ARGS=--cluster-dns=10.253.0.10' > /var/lib/kubelet/kubeadm-flags.env
+printf "net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n" > /etc/sysctl.d/k8s.conf
+sysctl --system >/dev/null 2>&1
+mknod /dev/kmsg c 1 11 2>/dev/null || true; chmod 666 /dev/kmsg 2>/dev/null || true
+if [ ! -f /opt/cni/bin/bridge ]; then
+  mkdir -p /opt/cni/bin
+  curl -sL "https://github.com/containernetworking/plugins/releases/download/v1.6.2/cni-plugins-linux-amd64-v1.6.2.tgz" -o /tmp/cni-plugins.tgz
+  tar -xzf /tmp/cni-plugins.tgz -C /opt/cni/bin/
+  rm -f /tmp/cni-plugins.tgz
+fi
+apt-get install -y -qq jq 2>/dev/null || true
+# Install flannel CNI binary
+if [ ! -f /opt/cni/bin/flannel ]; then
+  curl -sL "https://github.com/flannel-io/cni-plugin/releases/download/v1.9.1-flannel1/flannel-amd64" -o /tmp/flannel
+  chmod +x /tmp/flannel
+  mv /tmp/flannel /opt/cni/bin/flannel
+fi
+echo "INSTALL_DONE"
+SCRIPT_B64
 
-        # DNS fix: create kubeadm-flags.env so --cluster-dns is on CLI too
-        cat > /var/lib/kubelet/kubeadm-flags.env << \"C3dns\"
-KUBELET_KUBEADM_ARGS=--cluster-dns=10.253.0.10
-C3dns
+      echo "=== Copying + executing setup on LXC ==="
+      sshpass -p ubuntu scp -o StrictHostKeyChecking=no /tmp/lxc-setup.sh ubuntu@$NODE:/tmp/lxc-setup.sh
+      sshpass -p ubuntu ssh -o StrictHostKeyChecking=no ubuntu@$NODE "sudo bash /tmp/lxc-setup.sh" 2>&1
 
-        # CA cert and auth config for kubectl logs/exec
-        KCFG="/etc/kubernetes/kubelet.conf"
-        export KUBECONFIG="$KCFG"
-        mkdir -p /etc/kubernetes/pki
-        # Extract CA cert from the kubeconfig (it has certificate-authority-data from bootstrap)
-        python3 -c "
-import yaml, base64
-with open('$KCFG') as f:
-    cfg = yaml.safe_load(f)
-ca = cfg.get('clusters',[{}])[0].get('cluster',{}).get('certificate-authority-data','')
-if ca:
-    cert = base64.b64decode(ca).decode()
-    with open('/etc/kubernetes/pki/ca.crt','w') as f:
-        f.write(cert)
-    import os; os.chmod('/etc/kubernetes/pki/ca.crt', 0o644)
-    print('CA cert extracted to /etc/kubernetes/pki/ca.crt')
-else:
-    print('WARNING: no certificate-authority-data in kubeconfig')
-" 2>/dev/null || true
+      # Verify GPU and join cluster
+      echo "=== Checking GPU access ==="
+      sshpass -p ubuntu ssh ubuntu@$NODE "ls -la /dev/dri/ 2>/dev/null || echo 'WARNING: no /dev/dri'"
 
-        # Add authentication config to kubelet
-        python3 -c "
-import yaml
-with open('/var/lib/kubelet/config.yaml') as f:
-    cfg = yaml.safe_load(f)
-if 'authentication' not in cfg:
-    cfg['authentication'] = {'x509': {'clientCAFile': '/etc/kubernetes/pki/ca.crt'}}
-    with open('/var/lib/kubelet/config.yaml','w') as f:
-        yaml.dump(cfg, f)
-    print('Added authentication to kubelet config')
-else:
-    print('Authentication already configured')
-" 2>/dev/null || true
-
-        # === FIX 4: sysctl ===
-        cat > /etc/sysctl.d/k8s.conf << \"C4\"
-net.bridge.bridge-nf-call-iptables = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward = 1
-C4
-        sysctl --system
-
-        # === FIX 5: /dev/kmsg ===
-        mknod /dev/kmsg c 1 11 2>/dev/null || true
-        chmod 666 /dev/kmsg 2>/dev/null || true
-
-        # === FIX 6: CNI plugins + bridge config ===
-        if [ ! -f /opt/cni/bin/bridge ]; then
-          mkdir -p /opt/cni/bin
-          curl -sL \"https://github.com/containernetworking/plugins/releases/download/v1.6.2/cni-plugins-linux-amd64-v1.6.2.tgz\" -o /tmp/cni-plugins.tgz
-          tar -xzf /tmp/cni-plugins.tgz -C /opt/cni/bin/
-          rm -f /tmp/cni-plugins.tgz
-          ln -sf /opt/cni/bin/flanneld /opt/cni/bin/flannel 2>/dev/null || true
-        fi
-
-        mkdir -p /etc/cni/net.d
-
-        # Install jq
-        apt-get install -y -qq jq 2>/dev/null || true
-
-        echo \"INSTALL_DONE\"
-      '\" 2>&1
-
-      # Verify GPU
-      echo \"=== Checking GPU access ===\"
-      sshpass -p ubuntu ssh ubuntu@$NODE \"ls -la /dev/dri/ 2>/dev/null || echo 'WARNING: no /dev/dri'\"
-
-      # Join cluster
-      echo \"=== Joining Talos cluster ===\"
-      kubectl --kubeconfig=\"$KCFG\" delete node $NAME --ignore-not-found 2>/dev/null || true
-
+      echo "=== Joining Talos cluster ==="
+      kubectl --kubeconfig="$KCFG" delete node $NAME --ignore-not-found 2>/dev/null || true
       TOKEN=$(openssl rand -hex 3).$(openssl rand -hex 8)
-      kubectl --kubeconfig=\"$KCFG\" create secret generic \"bootstrap-token-$${TOKEN%.*}\" -n kube-system \
-        --type=\"bootstrap.kubernetes.io/token\" \
-        --from-literal=\"token-id=$${TOKEN%.*}\" \
-        --from-literal=\"token-secret=$${TOKEN#*.}\" \
-        --from-literal=\"usage-bootstrap-authentication=true\" \
-        --from-literal=\"usage-bootstrap-signing=true\" 2>/dev/null || true
+      kubectl --kubeconfig="$KCFG" create secret generic "bootstrap-token-$${TOKEN%.*}" -n kube-system \
+        --type="bootstrap.kubernetes.io/token" \
+        --from-literal="token-id=$${TOKEN%.*}" \
+        --from-literal="token-secret=$${TOKEN#*.}" \
+        --from-literal="usage-bootstrap-authentication=true" \
+        --from-literal="usage-bootstrap-signing=true" \
+        --from-literal="extra-groups=system:bootstrappers:nodes" 2>/dev/null || true
+      cat <<RBAC | kubectl --kubeconfig="$KCFG" apply -f - 2>/dev/null || true
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lxc-bootstrap-$${TOKEN%.*}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:node-bootstrapper
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: system:bootstrap:$${TOKEN%.*}
+RBAC
+      cat > /tmp/lxc-bootstrap.conf << BOOTCFG
+apiVersion: v1
+clusters:
+- cluster:
+    server: https://$VIP:6443
+    insecure-skip-tls-verify: true
+  name: default-cluster
+contexts:
+- context:
+    cluster: default-cluster
+    namespace: default
+    user: tls-bootstrap-token-user
+  name: tls-bootstrap-token-user@default-cluster
+current-context: tls-bootstrap-token-user@default-cluster
+kind: Config
+users:
+- name: tls-bootstrap-token-user
+  user:
+    token: $TOKEN
+BOOTCFG
+      sshpass -p ubuntu scp -o StrictHostKeyChecking=no /tmp/lxc-bootstrap.conf ubuntu@$NODE:/tmp/bootstrap.conf
+      sshpass -p ubuntu ssh -o StrictHostKeyChecking=no ubuntu@$NODE "sudo mkdir -p /etc/kubernetes && sudo cp /tmp/bootstrap.conf /etc/kubernetes/bootstrap-kubelet.conf && sudo chmod 600 /etc/kubernetes/bootstrap-kubelet.conf && sudo systemctl start kubelet"
 
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo kubeadm join $VIP:6443 \
-        --token $TOKEN \
-        --discovery-token-unsafe-skip-ca-verification \
-        --node-name=$NAME \
-        --ignore-preflight-errors=All,SystemVerification\" 2>&1
-
-      # Label node (retry until successful)
-      echo "=== Labeling node ==="
-      for retry in $(seq 1 10); do
-        if kubectl --kubeconfig="$KCFG" label node $NAME \
-          node-role.kubernetes.io/worker="" \
-          gpu.amd.com/node=lxc-gpu \
-          --overwrite 2>/dev/null; then
-          echo "Node labeled successfully"
+      # Approve CSRs and label
+      echo "=== Approving CSRs + labeling ==="
+      for i in $(seq 1 15); do
+        kubectl --kubeconfig="$KCFG" get csr -o json 2>/dev/null | \
+          jq -r '.items[] | select(.status.conditions == null) | .metadata.name' 2>/dev/null | \
+          xargs -I{} kubectl --kubeconfig="$KCFG" certificate approve {} 2>/dev/null || true
+        if kubectl --kubeconfig="$KCFG" get node $NAME 2>/dev/null >/dev/null; then
+          echo "Node $NAME registered!"
+          kubectl --kubeconfig="$KCFG" label node $NAME \
+            node-role.kubernetes.io/worker="" gpu.amd.com/node=lxc-gpu --overwrite 2>/dev/null || true
           break
         fi
-        echo "Waiting for node to be ready... (attempt $retry)"
-        sleep 10
+        sleep 4
       done
 
-      # Restart kubelet
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo systemctl restart kubelet\" 2>/dev/null || true
-
-      # Pre-pull images
-      echo \"=== Pre-pulling images ===\"
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo ctr image pull registry.k8s.io/pause:3.10.1 2>&1 | tail -1\" || true
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo ctr image pull registry.k8s.io/kube-proxy:v1.36.0 2>&1 | tail -1\" || true
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo ctr image pull ghcr.io/siderolabs/flannel:v0.28.4 2>&1 | tail -1\" || true
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo ctr image pull quay.io/kubevirt/virt-handler:v1.8.2 2>&1 | tail -1\" || true
-      sshpass -p ubuntu ssh ubuntu@$NODE \"sudo ctr image pull quay.io/kubevirt/virt-launcher:v1.8.2 2>&1 | tail -1\" || true
-
-      echo \"=====================================================\"
-      echo \"  DONE: LXC GPU worker ready!\"
-      echo \"  Node: $NAME ($NODE)\"
-      echo \"=====================================================\"
+      echo "====================================================="
+      echo "  DONE: LXC GPU worker ready!"
+      echo "  Node: $NAME ($NODE)"
+      echo "====================================================="
     SCRIPT
     interpreter = ["bash", "-c"]
   }
