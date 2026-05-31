@@ -30,7 +30,9 @@ resource "null_resource" "create_lxc_gpu" {
     vmid    = local.lxc_gpu_vmid
     name    = local.lxc_gpu_name
     host    = "192.168.88.242"
-    always  = timestamp()
+    memory  = local.lxc_gpu_memory
+    cores   = local.lxc_gpu_cores
+    disk    = local.lxc_gpu_disk
   }
 
   provisioner "local-exec" {
@@ -96,8 +98,7 @@ resource "null_resource" "configure_lxc_gpu_config" {
   depends_on = [null_resource.create_lxc_gpu]
   triggers = {
     vmid    = local.lxc_gpu_vmid
-    host    = local.proxmox_host
-    always  = timestamp()
+    host    = "192.168.88.242"
   }
 
   provisioner "local-exec" {
@@ -160,6 +161,8 @@ CONF"
       sleep 3
       # Create ubuntu user (lost on LXC recreation)
       ssh root@$HOST "pct exec $VMID -- useradd -m -s /bin/bash -G sudo ubuntu 2>/dev/null; echo 'ubuntu:ubuntu' | pct exec $VMID -- chpasswd; bash -c 'echo \"ubuntu ALL=(ALL) NOPASSWD:ALL\" | pct exec $VMID -- tee /etc/sudoers.d/ubuntu > /dev/null && pct exec $VMID -- chmod 440 /etc/sudoers.d/ubuntu'" 2>/dev/null || true
+      # Fix SSH password auth (Ubuntu 24.04 defaults KbdInteractiveAuthentication=no)
+      ssh root@$HOST "pct exec $VMID -- bash -c 'echo \"KbdInteractiveAuthentication yes\" > /etc/ssh/sshd_config.d/99-password-auth.conf && echo \"PasswordAuthentication yes\" >> /etc/ssh/sshd_config.d/99-password-auth.conf && systemctl restart sshd'" 2>/dev/null || true
       # Install KubePrism proxy (required by Talos flannel daemonset before kubelet starts)
       ssh root@$HOST "pct exec $VMID -- apt-get install -y -qq socat 2>/dev/null" || true
       ssh root@$HOST "pct exec $VMID -- bash -c 'cat > /etc/systemd/system/kubeprism-proxy.service << KPP
@@ -190,7 +193,6 @@ resource "null_resource" "setup_lxc_gpu" {
   triggers = {
     ip      = local.lxc_gpu_ip
     name    = local.lxc_gpu_name
-    always  = timestamp()
   }
 
   provisioner "local-exec" {
@@ -201,7 +203,8 @@ resource "null_resource" "setup_lxc_gpu" {
       VIP="${var.cluster_vip_shared_ip}"
       KCFG="${abspath(path.module)}/.csr-kubeconfig"
 
-      # Wait for LXC SSH
+      # Wait for LXC SSH (clean known_hosts first in case LXC was recreated)
+      ssh-keygen -R $NODE 2>/dev/null || true
       echo "=== Waiting for LXC SSH ==="
       for i in $(seq 1 60); do
         if sshpass -p ubuntu ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@$NODE "echo ready" 2>/dev/null; then
@@ -350,7 +353,6 @@ resource "null_resource" "approve_lxc_csr" {
   depends_on = [null_resource.setup_lxc_gpu]
   triggers = {
     name   = local.lxc_gpu_name
-    always = timestamp()
   }
 
   provisioner "local-exec" {

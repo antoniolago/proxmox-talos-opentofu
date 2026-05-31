@@ -236,9 +236,88 @@ resource "null_resource" "setup_ubuntu_gpu" {
         --node-name=$NAME \
         --ignore-preflight-errors=All" 2>&1
 
-      # Step 7: Label the node
+      # Step 7: Fix LXC — make /proc/sys writable for kubelet
+      # LXC containers mount /proc/sys read-only by default. kubelet needs to
+      # write to vm.overcommit_memory, kernel.panic, kernel.panic_on_oops.
+      echo "=== Fixing LXC /proc/sys writable ==="
+      ssh root@$PVE_HOST "grep -q 'proc/sys' /etc/pve/lxc/$VMID.conf || echo 'lxc.mount.entry: /proc/sys proc/sys none rw,bind 0 0' >> /etc/pve/lxc/$VMID.conf" 2>/dev/null || true
+      ssh root@$PVE_HOST "sysctl -w vm.overcommit_memory=1 kernel.panic=10 kernel.panic_on_oops=1" 2>/dev/null || true
+
+      # Step 8: Install flannel CNI wrapper (bypasses broken flanneld which tries to contact etcd)
+      # The original flannel CNI plugin (flanneld) when invoked with CNI_COMMAND=ADD
+      # tries to connect to etcd at 127.0.0.1:4001/2379 (kubeSubnetMgr=false) and hangs.
+      # This wrapper reads /run/flannel/subnet.env and delegates directly to bridge.
+      echo "=== Installing flannel CNI wrapper ==="
+      ssh ubuntu@$NODE "sudo tee /opt/cni/bin/flannel > /dev/null" << 'FLWRAPPER'
+#!/bin/bash
+set -euo pipefail
+if [ -f /run/flannel/subnet.env ]; then
+  source /run/flannel/subnet.env
+fi
+FLANNEL_SUBNET="$${FLANNEL_SUBNET:-10.252.6.0/24}"
+FLANNEL_MTU="$${FLANNEL_MTU:-1450}"
+FLANNEL_IPMASQ="$${FLANNEL_IPMASQ:-true}"
+IP="$${FLANNEL_SUBNET%%/*}"
+PREFIX="$${FLANNEL_SUBNET#*/}"
+NETWORK="$${IP%.*}.0/$PREFIX"
+exec /opt/cni/bin/bridge <<INNER
+{
+  "cniVersion": "1.0.0",
+  "name": "cbr0",
+  "type": "bridge",
+  "bridge": "cbr0",
+  "mtu": $FLANNEL_MTU,
+  "isDefaultGateway": true,
+  "ipMasq": $FLANNEL_IPMASQ,
+  "ipam": {
+    "type": "host-local",
+    "subnet": "$NETWORK",
+    "gateway": "$IP",
+    "dataDir": "/var/lib/cni/networks"
+  }
+}
+INNER
+FLWRAPPER
+      ssh ubuntu@$NODE "sudo chmod +x /opt/cni/bin/flannel" 2>/dev/null || true
+
+      # Step 9: Label the node
       echo "=== Labeling node ==="
       kubectl --kubeconfig="$KCFG" label node $NAME node-role.kubernetes.io/worker="" --overwrite 2>/dev/null || true
+
+      # Step 10: Fix Flannel CNI — create host directories needed for hostPath volumes
+      # containerd v2.2.1 (Ubuntu 24.04) behaves differently from v2.2.3 (Talos):
+      # hostPath volumes under /run/ with type="" get mounted as private tmpfs
+      # instead of bind mounts. Pre-creating dirs + DirectoryOrCreate fixes this.
+      echo "=== Fixing Flannel CNI host directories ==="
+      ssh ubuntu@$NODE "sudo mkdir -p /etc/cni/net.d /run/flannel"
+
+      # Step 11: Patch Flannel daemonset to use DirectoryOrCreate (idempotent)
+      echo "=== Patching Flannel daemonset hostPath types ==="
+      kubectl --kubeconfig="$KCFG" patch ds -n kube-system kube-flannel --type strategic --patch '
+spec:
+  template:
+    spec:
+      volumes:
+        - name: run
+          hostPath:
+            path: /run/flannel
+            type: DirectoryOrCreate
+        - name: cni
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+' 2>/dev/null || true
+
+      # Step 12: Restart Flannel pod on this node to pick up new volume types
+      echo "=== Restarting Flannel pod on $NAME ==="
+      kubectl --kubeconfig="$KCFG" delete pod -n kube-system -l k8s-app=flannel \
+        --field-selector spec.nodeName=$NAME --ignore-not-found 2>/dev/null || true
+      sleep 5
+
+      # Step 13: Restart kubelet to ensure clean CNI state
+      echo "=== Restarting kubelet ==="
+      ssh ubuntu@$NODE "sudo systemctl restart kubelet" 2>/dev/null || true
+      sleep 10
 
       echo "====================================================="
       echo "  DONE: Ubuntu GPU worker joined the cluster!"

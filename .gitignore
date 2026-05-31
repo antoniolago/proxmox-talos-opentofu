@@ -38,3 +38,4 @@ terraform.rc
 proxmox/.generated-kubeconfig
 proxmox/kubernetes/infra/.csr-kubeconfig
 proxmox/workstation/.generated-cloud-init.yaml
+proxmox/kubernetes/infra/.generated-kubeconfig

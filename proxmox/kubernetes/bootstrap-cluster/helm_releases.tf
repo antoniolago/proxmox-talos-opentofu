@@ -169,7 +169,7 @@ resource "null_resource" "fluxinstance" {
   }
 }
 
-resource "kubernetes_namespace" "vaultwarden" {
+resource "kubernetes_namespace" "vaultwarden_secrets" {
   depends_on = [null_resource.local_path_provisioner]
   metadata {
     name = var.vaultwarden_namespace
@@ -177,7 +177,7 @@ resource "kubernetes_namespace" "vaultwarden" {
 }
 
 resource "kubernetes_secret" "vaultwarden_credentials" {
-  depends_on = [kubernetes_namespace.vaultwarden]
+  depends_on = [kubernetes_namespace.vaultwarden_secrets]
   metadata {
     name      = "vaultwarden-kubernetes-secrets"
     namespace = var.vaultwarden_namespace
@@ -190,8 +190,15 @@ resource "kubernetes_secret" "vaultwarden_credentials" {
   }
 }
 
+resource "kubernetes_namespace" "vaultwarden_server" {
+  depends_on = [null_resource.local_path_provisioner]
+  metadata {
+    name = "vaultwarden"
+  }
+}
+
 resource "kubernetes_secret" "vaultwarden_server_credentials" {
-  depends_on = [kubernetes_namespace.vaultwarden]
+  depends_on = [kubernetes_namespace.vaultwarden_server]
   metadata {
     name      = "vaultwarden-secrets"
     namespace = "vaultwarden"
@@ -223,5 +230,25 @@ resource "kubernetes_secret" "cloudflare_secrets" {
   }
 
   type = "Opaque"
+}
+
+resource "kubernetes_secret" "cloudflare_secrets_cert_manager" {
+  depends_on = [kubernetes_secret.cloudflare_secrets, kubernetes_namespace.cert_manager]
+  metadata {
+    name      = "cloudflare-secrets"
+    namespace = "cert-manager"
+  }
+
+  data = {
+    cloudflare-token = var.cloudflare_token
+  }
+
+  type = "Opaque"
+}
+
+resource "kubernetes_namespace" "cert_manager" {
+  metadata {
+    name = "cert-manager"
+  }
 }
 
