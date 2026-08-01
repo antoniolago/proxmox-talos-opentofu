@@ -13,14 +13,15 @@
 #          └─ bridge CNI → pod networking sem depender de flannel
 
 locals {
-  lxc_gpu_enabled   = true
-  lxc_gpu_vmid      = 130
-  lxc_gpu_name      = "ton-cluster-k8s-worker-2"
-  lxc_gpu_ip        = "192.168.88.221"
-  lxc_gpu_memory    = 8192
-  lxc_gpu_cores     = 4
-  lxc_gpu_disk      = "40G"
-  lxc_gpu_template  = "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+  lxc_gpu_enabled        = true
+  lxc_gpu_vmid           = 130
+  lxc_gpu_name           = "ton-cluster-k8s-worker-2"
+  lxc_gpu_ip             = "192.168.88.221"
+  lxc_gpu_memory         = 8192
+  lxc_gpu_cores          = 4
+  lxc_gpu_disk           = "80G"
+  lxc_gpu_template       = "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+  lxc_gpu_setup_version  = "2"  # bump to force re-setup on next apply
 }
 
 # Step 0: Create LXC on Proxmox host (API token lacks root@pam for privileged LXC)
@@ -30,9 +31,6 @@ resource "null_resource" "create_lxc_gpu" {
     vmid    = local.lxc_gpu_vmid
     name    = local.lxc_gpu_name
     host    = "192.168.88.242"
-    memory  = local.lxc_gpu_memory
-    cores   = local.lxc_gpu_cores
-    disk    = local.lxc_gpu_disk
   }
 
   provisioner "local-exec" {
@@ -99,6 +97,8 @@ resource "null_resource" "configure_lxc_gpu_config" {
   triggers = {
     vmid    = local.lxc_gpu_vmid
     host    = "192.168.88.242"
+    memory  = local.lxc_gpu_memory
+    disk    = local.lxc_gpu_disk
   }
 
   provisioner "local-exec" {
@@ -152,6 +152,13 @@ lxc.mount.entry: /proc/sys/kernel/panic proc/sys/kernel/panic none bind,optional
 lxc.mount.entry: /proc/sys/kernel/panic_on_oops proc/sys/kernel/panic_on_oops none bind,optional,create=file
 CONF"
       echo "LXC config written. Rebooting..."
+      # Resize rootfs se o tamanho configurado mudou (thin pool tem espaço após remover CT107)
+      CUR=$(ssh root@$HOST "pct config $VMID | grep -oP 'rootfs: .*?size=\\K[0-9]+G' | head -1")
+      if [ "$CUR" != "${local.lxc_gpu_disk}" ]; then
+        echo "Resizing rootfs: $CUR -> ${local.lxc_gpu_disk}"
+        ssh root@$HOST "pct resize $VMID rootfs ${local.lxc_gpu_disk}"
+        ssh root@$HOST "pct exec $VMID -- resize2fs /dev/mapper/pve-vm-$${VMID}-disk--0 2>/dev/null || true"
+      fi
       # Ensure host sysctls are set for kubelet in LXC
       ssh root@$HOST "echo 'vm.overcommit_memory=1' > /etc/sysctl.d/99-kubelet-lxc.conf && echo 'kernel.panic=10' >> /etc/sysctl.d/99-kubelet-lxc.conf && echo 'kernel.panic_on_oops=0' >> /etc/sysctl.d/99-kubelet-lxc.conf && sysctl -p /etc/sysctl.d/99-kubelet-lxc.conf" 2>/dev/null || true
       ssh root@$HOST "pct reboot $VMID" 2>/dev/null || true
@@ -193,6 +200,9 @@ resource "null_resource" "setup_lxc_gpu" {
   triggers = {
     ip      = local.lxc_gpu_ip
     name    = local.lxc_gpu_name
+    memory  = local.lxc_gpu_memory
+    cores   = local.lxc_gpu_cores
+    version = local.lxc_gpu_setup_version
   }
 
   provisioner "local-exec" {
@@ -214,13 +224,49 @@ resource "null_resource" "setup_lxc_gpu" {
         sleep 10
       done
 
+      # Extract CA cert from kubeconfig and copy to LXC for kubelet clientCAFile
+      echo "=== Copying CA cert to LXC ===\n"
+      kubectl --kubeconfig="$KCFG" config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' 2>/dev/null | base64 -d > /tmp/lxc-ca.crt
+      sshpass -p ubuntu scp -o StrictHostKeyChecking=no /tmp/lxc-ca.crt ubuntu@$NODE:/tmp/ca.crt
+      sshpass -p ubuntu ssh -o StrictHostKeyChecking=no ubuntu@$NODE "sudo mkdir -p /etc/kubernetes/pki && sudo cp /tmp/ca.crt /etc/kubernetes/pki/ca.crt && sudo chmod 644 /etc/kubernetes/pki/ca.crt"
+      echo "CA cert copied"
+
+      # IDEMPOTENCY CHECK — if node is already joined and Ready, skip everything
+      if kubectl --kubeconfig="$KCFG" get node $NAME -o json 2>/dev/null | jq -r '.status.conditions[] | select(.type=="Ready") | .status' 2>/dev/null | grep -q True; then
+        echo "=== Node $NAME is already Ready — skipping rejoin ==="
+        echo "DONE"
+        exit 0
+      fi
+      echo "Node not Ready — will rejoin"
+
       # Write setup script locally, SCP it, execute
-      echo "=== Generating setup script ==="
+      echo "=== Generating idempotent setup script ===\n"
       cat > /tmp/lxc-setup.sh << 'SCRIPT_B64'
 #!/bin/bash
 set -e
-apt-get update -qq
-apt-get install -y -qq curl wget gnupg ca-certificates apt-transport-https jq containerd
+
+# === IDEMPOTENCY CHECK: if kubelet is running and node is Ready, skip ===
+if command -v kubelet &>/dev/null && systemctl is-active -q kubelet 2>/dev/null; then
+  # Check if node is actually joined
+  NODE_NAME=$(hostname 2>/dev/null || echo "${local.lxc_gpu_name}")
+  if grep -q 'server:' /etc/kubernetes/kubelet.conf 2>/dev/null; then
+    echo "=== kubelet running with valid config — setup already complete ==="
+    exit 0
+  fi
+fi
+
+echo "=== kubelet missing or broken — running full recovery setup ==="
+
+# === CLEAN BROKEN STATE ===
+systemctl stop kubelet 2>/dev/null || true
+systemctl stop containerd 2>/dev/null || true
+rm -rf /var/lib/kubelet/pki /var/lib/kubelet/cpu_manager_state /etc/kubernetes/kubelet.conf 2>/dev/null || true
+
+# === INSTALL PACKAGES IF MISSING ===
+if ! command -v containerd &>/dev/null; then
+  apt-get update -qq
+  apt-get install -y -qq curl wget gnupg ca-certificates apt-transport-https jq containerd
+fi
 curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
 apt-get update -qq
@@ -247,6 +293,9 @@ clusterDNS:
 clusterDomain: cluster.local
 serverTLSBootstrap: true
 rotateCertificates: true
+authentication:
+  x509:
+    clientCAFile: /etc/kubernetes/pki/ca.crt
 C3
 echo 'KUBELET_KUBEADM_ARGS=--cluster-dns=10.253.0.10' > /var/lib/kubelet/kubeadm-flags.env
 printf "net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n" > /etc/sysctl.d/k8s.conf
