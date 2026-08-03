@@ -38,6 +38,9 @@ machine:
     node-role.kubernetes.io/control-plane: ""
 cluster:
   allowSchedulingOnControlPlanes: false
+  apiServer:
+    extraArgs:
+      enable-bootstrap-token-auth: "true"
   network:
     #cni:
     #  name: none

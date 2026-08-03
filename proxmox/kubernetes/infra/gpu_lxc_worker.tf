@@ -17,7 +17,7 @@ locals {
   lxc_gpu_vmid           = 130
   lxc_gpu_name           = "ton-cluster-k8s-worker-2"
   lxc_gpu_ip             = "192.168.88.221"
-  lxc_gpu_memory         = 8192
+  lxc_gpu_memory         = 26000
   lxc_gpu_cores          = 4
   lxc_gpu_disk           = "80G"
   lxc_gpu_template       = "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
