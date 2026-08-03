@@ -1,0 +1,40 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - containerd
+  - curl
+  - wget
+  - gnupg
+  - ca-certificates
+  - apt-transport-https
+  - jq
+  - linux-image-extra-virtual
+  - pciutils
+
+runcmd:
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  - echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+  - apt-get update -qq
+  - apt-get install -y -qq kubelet kubeadm kubectl
+  - apt-mark hold kubelet kubeadm kubectl
+  - systemctl disable kubelet
+  - mkdir -p /etc/containerd
+  - containerd config default > /etc/containerd/config.toml
+  - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  - systemctl enable containerd
+  - systemctl start containerd
+  - echo 'vfio-pci' > /etc/modules-load.d/vfio.conf
+  - echo 'vfio_iommu_type1' >> /etc/modules-load.d/vfio.conf
+  - modprobe vfio-pci || true
+  - modprobe vfio_iommu_type1 || true
+  - mkdir -p /etc/kubernetes
+  - echo "Waiting for bootstrap token..." > /var/log/kubelet-join.log
+
+power_state:
+  delay: "+1"
+  mode: reboot
+  message: Rebooting after first boot setup
+  timeout: 30
+  condition: True

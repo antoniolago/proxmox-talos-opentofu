@@ -1,0 +1,13 @@
+# Kubernetes
+kubernetes_config_path    = "~/.kube/config"
+Kubernetes_config_context = "admin@yourclustername"
+
+
+# GitHub credentials for Flux GitRepository authentication
+github_username = "your-github-username"
+github_password = "your-github-personal-access-token"
+
+# Vaultwarden Kubernetes Secrets
+vaultwarden_client_id       = "<your_client_id>"
+vaultwarden_client_secret   = "<your_client_secret>"
+vaultwarden_master_password = "<your_master_password>"

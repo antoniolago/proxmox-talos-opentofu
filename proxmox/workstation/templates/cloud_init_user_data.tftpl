@@ -1,0 +1,321 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${hostname}.local
+manage_etc_hosts: true
+
+timezone: ${timezone}
+locale: ${locale}
+
+users:
+  - name: ${username}
+    groups: [sudo, docker, adm]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  # Core system
+  - qemu-guest-agent
+  - openssh-server
+  - curl
+  - wget
+  - git
+  - htop
+  - neofetch
+  - tmux
+  - unzip
+  - zip
+  - jq
+  - tree
+  
+  # i3wm and display
+  - xorg
+  - i3-wm
+  - i3status
+  - i3lock
+  - lightdm
+  - lightdm-gtk-greeter
+  - dmenu
+  - rofi
+  - feh
+  - picom
+  - dunst
+  - lxappearance
+  - arandr
+  
+  # Terminal and editors
+  - kitty
+  - neovim
+  - vim
+  
+  # Development essentials
+  - build-essential
+  - python3
+  - python3-pip
+  - python3-venv
+  - nodejs
+  - npm
+  - golang-go
+  - rustc
+  - cargo
+  
+  # Network tools
+  - net-tools
+  - dnsutils
+  - iputils-ping
+  - traceroute
+  - nmap
+  
+  # File management
+  - ranger
+  - thunar
+  - gvfs
+  
+  # Browser
+  - firefox
+  
+  # Misc utilities
+  - xclip
+  - maim
+  - redshift
+  - pavucontrol
+  - pulseaudio
+  - fonts-firacode
+  - fonts-font-awesome
+%{ for pkg in additional_packages ~}
+  - ${pkg}
+%{ endfor ~}
+
+runcmd:
+  # Enable and start services
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - systemctl enable ssh
+  - systemctl start ssh
+  - systemctl enable lightdm
+  
+  # Set default display manager
+  - echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
+  
+%{ if install_docker ~}
+  # Install Docker
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ${username}
+  - systemctl enable docker
+  - systemctl start docker
+  
+  # Install Docker Compose
+  - curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+  - chmod +x /usr/local/bin/docker-compose
+%{ endif ~}
+
+%{ if install_vscode ~}
+  # Install VS Code
+  - wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/packages.microsoft.gpg
+  - install -D -o root -g root -m 644 /tmp/packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
+  - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+  - apt update
+  - apt install -y code
+%{ endif ~}
+
+  # Create i3 config directory
+  - mkdir -p /home/${username}/.config/i3
+  - mkdir -p /home/${username}/.config/kitty
+  - mkdir -p /home/${username}/.config/rofi
+  
+  # Create minimal i3 config
+  - |
+    cat > /home/${username}/.config/i3/config << 'EOFCONFIG'
+    # i3 config file
+    set $mod Mod4
+    
+    # Font
+    font pango:FiraCode Nerd Font 10
+    
+    # Use Mouse+$mod to drag floating windows
+    floating_modifier $mod
+    
+    # Terminal
+    bindsym $mod+Return exec kitty
+    
+    # Kill focused window
+    bindsym $mod+Shift+q kill
+    
+    # Application launcher
+    bindsym $mod+d exec --no-startup-id rofi -show drun
+    bindsym $mod+Tab exec --no-startup-id rofi -show window
+    
+    # Change focus
+    bindsym $mod+h focus left
+    bindsym $mod+j focus down
+    bindsym $mod+k focus up
+    bindsym $mod+l focus right
+    
+    # Move focused window
+    bindsym $mod+Shift+h move left
+    bindsym $mod+Shift+j move down
+    bindsym $mod+Shift+k move up
+    bindsym $mod+Shift+l move right
+    
+    # Split orientation
+    bindsym $mod+b split h
+    bindsym $mod+v split v
+    
+    # Fullscreen
+    bindsym $mod+f fullscreen toggle
+    
+    # Container layout
+    bindsym $mod+s layout stacking
+    bindsym $mod+w layout tabbed
+    bindsym $mod+e layout toggle split
+    
+    # Toggle floating
+    bindsym $mod+Shift+space floating toggle
+    bindsym $mod+space focus mode_toggle
+    
+    # Workspaces
+    set $ws1 "1"
+    set $ws2 "2"
+    set $ws3 "3"
+    set $ws4 "4"
+    set $ws5 "5"
+    set $ws6 "6"
+    set $ws7 "7"
+    set $ws8 "8"
+    set $ws9 "9"
+    set $ws10 "10"
+    
+    bindsym $mod+1 workspace $ws1
+    bindsym $mod+2 workspace $ws2
+    bindsym $mod+3 workspace $ws3
+    bindsym $mod+4 workspace $ws4
+    bindsym $mod+5 workspace $ws5
+    bindsym $mod+6 workspace $ws6
+    bindsym $mod+7 workspace $ws7
+    bindsym $mod+8 workspace $ws8
+    bindsym $mod+9 workspace $ws9
+    bindsym $mod+0 workspace $ws10
+    
+    bindsym $mod+Shift+1 move container to workspace $ws1
+    bindsym $mod+Shift+2 move container to workspace $ws2
+    bindsym $mod+Shift+3 move container to workspace $ws3
+    bindsym $mod+Shift+4 move container to workspace $ws4
+    bindsym $mod+Shift+5 move container to workspace $ws5
+    bindsym $mod+Shift+6 move container to workspace $ws6
+    bindsym $mod+Shift+7 move container to workspace $ws7
+    bindsym $mod+Shift+8 move container to workspace $ws8
+    bindsym $mod+Shift+9 move container to workspace $ws9
+    bindsym $mod+Shift+0 move container to workspace $ws10
+    
+    # Reload/Restart/Exit
+    bindsym $mod+Shift+c reload
+    bindsym $mod+Shift+r restart
+    bindsym $mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes' 'i3-msg exit'"
+    
+    # Lock screen
+    bindsym $mod+Shift+x exec i3lock -c 000000
+    
+    # Screenshot
+    bindsym Print exec --no-startup-id maim ~/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png
+    bindsym $mod+Print exec --no-startup-id maim -s ~/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png
+    
+    # Resize mode
+    mode "resize" {
+        bindsym h resize shrink width 10 px or 10 ppt
+        bindsym j resize grow height 10 px or 10 ppt
+        bindsym k resize shrink height 10 px or 10 ppt
+        bindsym l resize grow width 10 px or 10 ppt
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+    }
+    bindsym $mod+r mode "resize"
+    
+    # Status bar
+    bar {
+        status_command i3status
+        position top
+        colors {
+            background #1a1a2e
+            statusline #eaeaea
+            separator #666666
+            focused_workspace  #4a4a6a #4a4a6a #ffffff
+            active_workspace   #2a2a4a #2a2a4a #ffffff
+            inactive_workspace #1a1a2e #1a1a2e #888888
+            urgent_workspace   #e94560 #e94560 #ffffff
+        }
+    }
+    
+    # Window colors
+    client.focused          #4a4a6a #4a4a6a #ffffff #4a4a6a #4a4a6a
+    client.focused_inactive #2a2a4a #2a2a4a #888888 #2a2a4a #2a2a4a
+    client.unfocused        #1a1a2e #1a1a2e #888888 #1a1a2e #1a1a2e
+    client.urgent           #e94560 #e94560 #ffffff #e94560 #e94560
+    
+    # Gaps (if using i3-gaps)
+    gaps inner 8
+    gaps outer 4
+    
+    # Startup applications
+    exec --no-startup-id picom -b
+    exec --no-startup-id dunst
+    EOFCONFIG
+  
+  # Create kitty config
+  - |
+    cat > /home/${username}/.config/kitty/kitty.conf << 'EOFKITTY'
+    font_family FiraCode Nerd Font
+    font_size 11.0
+    
+    background_opacity 0.95
+    
+    # Colors (One Dark inspired)
+    foreground #abb2bf
+    background #1a1a2e
+    cursor #528bff
+    
+    color0 #1a1a2e
+    color1 #e94560
+    color2 #0f3460
+    color3 #e7d160
+    color4 #533483
+    color5 #9c27b0
+    color6 #16213e
+    color7 #eaeaea
+    color8 #4a4a6a
+    color9 #e94560
+    color10 #0f3460
+    color11 #e7d160
+    color12 #533483
+    color13 #9c27b0
+    color14 #16213e
+    color15 #ffffff
+    
+    enable_audio_bell no
+    window_padding_width 8
+    EOFKITTY
+  
+  # Fix ownership
+  - chown -R ${username}:${username} /home/${username}/.config
+  
+  # Create Pictures directory for screenshots
+  - mkdir -p /home/${username}/Pictures
+  - chown ${username}:${username} /home/${username}/Pictures
+  
+  # Set up tmpfs for /tmp (performance optimization)
+  - echo "tmpfs /tmp tmpfs defaults,noatime,nosuid,nodev,size=2G 0 0" >> /etc/fstab
+  
+  # Clean up
+  - apt autoremove -y
+  - apt clean
+
+final_message: "Ubuntu workstation ready! Boot time: $UPTIME seconds"
+
+power_state:
+  mode: reboot
+  message: "Rebooting after cloud-init completion"
+  timeout: 30
+  condition: true

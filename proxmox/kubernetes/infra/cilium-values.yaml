@@ -1,0 +1,59 @@
+cni:
+  exclusive: false
+hubble:  
+  enabled: true
+  ui:
+    enabled: true
+  relay:
+    enabled: true
+
+# Core networking
+kubeProxyReplacement: true
+routingMode: tunnel
+tunnelProtocol: vxlan
+
+# IPv4/IPv6
+ipv4:
+  enabled: true
+ipv6:
+  enabled: false
+
+# Masquerading - enable for external connectivity
+enableIPv4Masquerade: true
+bpf:
+  masquerade: true
+  lbExternalClusterIP: true
+
+# IP Masq Agent for Tailscale exclusion
+ipMasqAgent:
+  enabled: true
+  config:
+    nonMasqueradeCIDRs:
+      - 100.64.0.0/10
+      - 10.252.0.0/16
+
+# Socket LB for kube-proxy replacement
+socketLb:
+  enabled: true
+  hostNamespaceOnly: true
+securityContext:
+  privileged: false
+  capabilities:
+    ciliumAgent:
+      - CHOWN
+      - KILL
+      - NET_ADMIN
+      - NET_RAW
+      - IPC_LOCK
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    cleanCiliumState:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - SYS_RESOURCE
+initContainers:
+  privileged: true

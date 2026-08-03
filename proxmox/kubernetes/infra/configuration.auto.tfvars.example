@@ -1,0 +1,89 @@
+# Proxmox
+proxmox_api_url = "https://192.168.88.240:8006/api2/json"
+proxmox_api_token_id = "root@pam!123123"
+proxmox_api_token_secret = "123123123"
+proxmox_target_node = "ton"
+proxmox_storage_device   = "local-lvm"
+
+# Talos Linux
+# Set the desired Talos version - the schematic and ISO will be generated dynamically
+talos_version                  = "1.13.0"
+kubernetes_version             = "1.36.0"
+# Optional: Override the auto-generated ISO URL if you have a custom image
+# talos_linux_iso_image_url = ""
+# Name of the cluster
+cluster_name = "ton-cluster"
+# VIP address for the control planes, see https://www.talos.dev/v1.13/talos-guides/network/vip/
+cluster_vip_shared_ip = "192.168.88.200"
+# The node configuration with granular resource allocation, adjust it to your liking
+# Note: install_image is optional. If omitted, it will be auto-generated from the schematic.
+node_data = {
+  controlplanes = {
+    "192.168.88.201" = {
+      install_disk  = "/dev/vda"
+      memory        = 5056   # 8GB RAM
+      cpu_cores     = 1      # 2 CPU cores
+      disk_size     = "15G"  # 50GB disk
+      target_node   = "ton01"  # Optional: specify Proxmox node
+    },
+    "192.168.88.202" = {
+      install_disk  = "/dev/vda"
+      memory        = 5056   # 8GB RAM
+      cpu_cores     = 1      # 2 CPU cores
+      disk_size     = "15G"  # 50GB disk
+      target_node   = "ton02"  # Optional: specify Proxmox node
+    },
+    "192.168.88.203" = {
+      install_disk  = "/dev/vda"
+      memory        = 3056   # 8GB RAM
+      cpu_cores     = 2      # 2 CPU cores
+      disk_size     = "15G"  # 50GB disk
+      target_node   = "ton03"  # Optional: specify Proxmox node
+    }
+  }
+  workers = {
+    "192.168.88.204" = {
+      install_disk  = "/dev/vda"
+      memory        = 10384  
+      cpu_cores     = 6      
+      disk_size     = "100G" # 100GB disk
+      target_node   = "ton01"  # Optional: specify Proxmox node
+    },
+    "192.168.88.205" = {
+      install_disk  = "/dev/vda"
+      memory        = 10384  # 32GB RAM
+      cpu_cores     = 3      # 8 CPU cores
+      disk_size     = "100G" # 200GB disk
+      target_node   = "ton02"  # Optional: specify Proxmox node
+    },
+    "192.168.88.206" = {
+      install_disk  = "/dev/vda"
+      target_node   = "ton03"
+      #pci_devices = [
+      #  {
+      #    id         = "0"
+      #    mapping_id = "amdgpu"
+      #  }
+      #]
+      #machine_config_extra = <<-EOT
+      #  machine:
+      #    kernel:
+      #      modules:
+      #        - name: amdgpu
+      #EOT
+      memory        = 8000  # 32GB RAM
+      cpu_cores     = 8      # 8 CPU cores
+      disk_size     = "100G" # 200GB disk
+      target_node   = "ton03"  # Optional: specify Proxmox node
+    }
+  }
+}
+# Network configuration, which is applied to all nodes
+network            = "192.168.88.0/24"
+network_gateway    = "192.168.88.1"
+domain_name_server = "192.168.88.1"
+vlan_tag           = 0 # Optional: if you don't specify it no Vlan tag is set for the virtual machines
+
+merge_kubeconfig = true
+
+install_cilium = false

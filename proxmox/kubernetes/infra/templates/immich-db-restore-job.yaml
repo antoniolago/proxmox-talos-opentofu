@@ -1,0 +1,79 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: immich-db-restore-post-rebuild
+  namespace: immich
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: restore-from-s3
+        image: d3fk/s3cmd
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+
+          echo "=== Waiting for immich CNPG cluster ==="
+          until pg_isready -h immich-rw.immich.svc.cluster.local -p 5432 -U immich 2>/dev/null; do
+            echo "Waiting for immich-rw service..."
+            sleep 10
+          done
+
+          echo "=== Downloading latest S3 backup ==="
+          LATEST=$(s3cmd --no-check-hostname --region=$S3_REGION --host=$S3_ENDPOINT \
+            ls s3://$S3_BUCKET/$S3_PATH/ | tail -1 | awk '{print $4}')
+
+          if [ -z "$LATEST" ]; then
+            echo "No backup found, skipping restore"
+            exit 0
+          fi
+
+          echo "Latest backup: $LATEST"
+          s3cmd --no-check-hostname --region=$S3_REGION --host=$S3_ENDPOINT \
+            get "$LATEST" /tmp/backup.sql
+
+          echo "=== Restoring database ==="
+          export PGPASSWORD=$DB_PASSWORD
+
+          # Drop and recreate schema
+          psql -h immich-rw.immich.svc.cluster.local -p 5432 -U $DB_USER $DB_NAME \
+            -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+          # Restore from dump
+          psql -h immich-rw.immich.svc.cluster.local -p 5432 -U $DB_USER $DB_NAME \
+            -f /tmp/backup.sql
+
+          echo "=== Restore complete ==="
+        env:
+        - name: DB_NAME
+          value: immich
+        - name: DB_USER
+          value: immich
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: immich-app
+              key: db-password
+        - name: S3_BUCKET
+          value: backups
+        - name: S3_PATH
+          value: immich/daily
+        - name: S3_ENDPOINT
+          value: s3.lag0.com.br
+        - name: S3_REGION
+          value: ton-cluster
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: access-key
+              name: rustfs-credentials
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: secret-key
+              name: rustfs-credentials

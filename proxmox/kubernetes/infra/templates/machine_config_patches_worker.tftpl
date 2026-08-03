@@ -1,0 +1,46 @@
+machine:
+  kernel:
+    modules:
+      - name: binfmt_misc
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+          - https://harbor.lag0.com.br/v2
+  features:
+    hostDNS:
+      forwardKubeDNSToHost: false
+  time:
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+  install:
+    disk: ${install_disk}
+    image: ${install_image}
+  kubelet:
+    extraConfig:
+      serverTLSBootstrap: true
+  network:
+    nameservers:
+      - ${dns}
+    interfaces:
+      - deviceSelector:
+          physical: true
+        addresses:
+          - ${ip_address}
+        routes:
+          - network: ${network}
+            gateway: ${network_gateway}
+  nodeLabels:
+    node-role.kubernetes.io/worker: ""
+cluster:
+  network:
+    #cni:
+    #  name: none
+    podSubnets:
+      - 10.252.0.0/16
+    serviceSubnets:
+      - 10.253.0.0/16
+  proxy:
+    disabled: false
